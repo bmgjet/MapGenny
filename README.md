@@ -183,7 +183,7 @@ The server will continue processing each job until:
 
 Large zip files may take time to upload depending on your internet speed.
 
-========================================
+
 END USER LICENSE AGREEMENT (EULA)
 ========================================
 
