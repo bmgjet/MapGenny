@@ -1,6 +1,6 @@
-========================================
+
 MapGenny – Rust Map Generation System
-========================================
+=====================================
 
 Author:
 bmgjet
@@ -12,6 +12,7 @@ MapGenny is a server-side map generation system designed for the game Rust.
 It runs as a Harmony mod and provides a web-based interface for generating,
 processing, Rust map files and optional custom prefabs.
 
+[ScreenShot]: https://raw.githubusercontent.com/bmgjet/MapGenny/refs/heads/main/screenshot.jpg  "ScreenShot"
 
 --------------------------------------------------
 Tested Platforms
