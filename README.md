@@ -46,10 +46,12 @@ Installation
 1. Install MapGenny
 -------------------
 Place:
-HarmonyMapGenny.dll
+MapGenny.dll
 
 Into:
 HarmonyMods/
+
+It can be found in bin/Release
 
 --------------------------------------------------
 Running the Server
