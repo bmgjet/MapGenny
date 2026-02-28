@@ -36,6 +36,7 @@ using System.Collections;
 using Unity.Jobs;
 using Unity.Burst;
 using Newtonsoft.Json;
+using Rust;
 
 namespace MapGenny
 {
@@ -293,70 +294,94 @@ namespace MapGenny
                 }
             }
 
-            private static Vector3 GetUniqueOceanPosition()
+            public static Vector3 GetUniqueOceanPosition()
             {
-                for (int i = 0; i < 250; i++)
+                for (int i = 0; i < 500; i++)
                 {
                     Vector3 candidate = RandomOceanPosition();
-                    if (candidate == Vector3.zero) { continue; }
+                    if (candidate == Vector3.zero) continue;
+
+                    // Check against other generated Labs in our session
                     bool tooClose = false;
                     foreach (var existing in DungeonLabSettings.LabPos)
                     {
-                        if (Vector3.Distance(existing, candidate) < 300f) // avoid overlap radius
+                        // Using Distance for clarity: 300f meters
+                        if (Vector3.Distance(existing, candidate) < 300f)
                         {
                             tooClose = true;
                             break;
                         }
                     }
-                    if (!tooClose) { return candidate; }
+                    if (tooClose) continue;
+
+                    return candidate;
                 }
                 return Vector3.zero;
             }
 
+            private static bool IsNearExistingPrefab(Vector3 pos)
+            {
+                foreach (var prefab in World.Serialization.world.prefabs)
+                {
+                    Vector3 prefabPos = prefab.position;
+                    float actualDistance = Vector3.Distance(prefabPos, pos);
+
+                    // Check for Oil Rig specifically (500m)
+                    if (prefab.id == Library.OILRIG_1 || prefab.id == Library.OILRIG_2)
+                    {
+                        if (actualDistance < 500f) return true;
+                    }
+                    // Check for everything else (100m)
+                    else if (actualDistance < 100f)
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             private static Vector3 RandomOceanPosition()
             {
-                float half = World.Size * 0.5f;
-                float minWaterWidth = DungeonLabSettings.edgeBuffer;   // typical ocean width before land
-                float maxWaterWidth = minWaterWidth * 2;  // cap for deep ocean band
-                float safeDistanceFromLand = 200f; // how far from coast we must be
+                float worldRadius = World.Size * 0.5f;
+                float minDistanceFromCenter = World.Size * 0.1f; //Don't get too close to the dead center
+                float maxDistanceFromCenter = worldRadius - DungeonLabSettings.edgeBuffer;
+
+                float safeDistanceFromLand = 350f;
                 float minDepth = DungeonLabSettings.minDepth;
-                for (int i = 0; i < 1000; i++)
+
+                for (int i = 0; i < 2000; i++)
                 {
-                    // Choose a random direction (N/S/E/W edge band)
-                    int edge = UnityEngine.Random.Range(0, 4);
-                    float offset = UnityEngine.Random.Range(minWaterWidth, maxWaterWidth);
-                    float x = 0f, z = 0f;
-                    switch (edge)
-                    {
-                        case 0: // North
-                            x = UnityEngine.Random.Range(-half + 200f, half - 200f);
-                            z = half - offset;
-                            break;
-                        case 1: // South
-                            x = UnityEngine.Random.Range(-half + 200f, half - 200f);
-                            z = -half + offset;
-                            break;
-                        case 2: // East
-                            x = half - offset;
-                            z = UnityEngine.Random.Range(-half + 200f, half - 200f);
-                            break;
-                        case 3: // West
-                            x = -half + offset;
-                            z = UnityEngine.Random.Range(-half + 200f, half - 200f);
-                            break;
-                    }
+                    //Get a random direction
+                    float angle = UnityEngine.Random.Range(0f, Mathf.PI * 2f);
+
+                    //Get a random distance with a "Center Bias"
+                    float t = UnityEngine.Random.value;
+                    float weight = 1.0f - (t * t);
+
+                    float distance = Mathf.Lerp(minDistanceFromCenter, maxDistanceFromCenter, weight);
+
+                    //Convert Polar to Cartesian (X, Z)
+                    float x = Mathf.Cos(angle) * distance;
+                    float z = Mathf.Sin(angle) * distance;
 
                     var pos = new Vector3(x, 0f, z);
-                    float terrain = TerrainMeta.HeightMap.GetHeight(pos);
-                    // Require it to be deep ocean, not shallow shore
-                    if (terrain > -minDepth) { continue; }
-                    // Sample around the point to make sure it’s not near land
-                    if (IsNearLand(pos, safeDistanceFromLand)) { continue; }
-                    pos.y = terrain;
+
+                    //Validation Checks
+                    float terrainHeight = TerrainMeta.HeightMap.GetHeight(pos);
+
+                    //Is it deep enough?
+                    if (terrainHeight > -minDepth) continue;
+
+                    //Is it away from the coast?
+                    if (IsNearLand(pos, safeDistanceFromLand)) continue;
+
+                    // Scan World Serialization for existing Prefabs (Oil Rigs & Others)
+                    if (IsNearExistingPrefab(pos)) continue;
+
+                    pos.y = terrainHeight;
                     return pos;
                 }
 
-                // fallback: return zero to signal failure
                 return Vector3.zero;
             }
 
@@ -375,6 +400,7 @@ namespace MapGenny
 
                 return false;
             }
+        
 
             private static bool NextCalls(List<CodeInstruction> codes, int index, string methodName)
             {
@@ -556,6 +582,103 @@ namespace MapGenny
             }
         }
 
+        [HarmonyPatch(typeof(TerrainPath), nameof(TerrainPath.CreateRoadCostmap))]
+        public static class RoadCostmap_Transpiler
+        {
+            [HarmonyTranspiler]
+            public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            {
+                var codes = new List<CodeInstruction>(instructions);
+                for (int i = 0; i < codes.Count; i++)
+                {
+                    //Match: slope > 20f
+                    //IL: ldc.r4 20
+                    if (codes[i].opcode == OpCodes.Ldc_R4 && (float)codes[i].operand == 20f)
+                    {
+                        codes[i] = new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(RoadCostmap_Transpiler), nameof(GetMaxRoadSlope)));
+                    }
+
+                    else if (codes[i].opcode == OpCodes.Ldc_I4 && (int)codes[i].operand == 5000)
+                        codes[i] = new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(RoadCostmap_Transpiler), nameof(GetMaxRoadCost)));
+                }
+                return codes;
+            }
+
+            public static float GetMaxRoadSlope()
+            {
+                string value;
+                if (Library.ConfigVars.TryGetValue("height.roadslope", out value))
+                {
+                    float num;
+                    if (float.TryParse(value, out num))
+                        return num;
+                }
+                return 20; 
+            }
+
+            public static int GetMaxRoadCost()
+            {
+                string value;
+                if (Library.ConfigVars.TryGetValue("height.roadweight", out value))
+                {
+                    int num;
+                    if (int.TryParse(value, out num))
+                        return num;
+                }
+                return 5000;
+            }
+        }
+
+        [HarmonyPatch(typeof(TerrainPath), nameof(TerrainPath.CreateRailCostmap))]
+        public static class RailCostmap_Transpiler
+        {
+            [HarmonyTranspiler]
+            public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+            {
+                var codes = new List<CodeInstruction>(instructions);
+                for (int i = 0; i < codes.Count; i++)
+                {
+                    //Target the Max Slope (30f)
+                    if (codes[i].opcode == OpCodes.Ldc_R4 && (float)codes[i].operand == 30f)
+                    {
+                        codes[i] = new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(RailCostmap_Transpiler), nameof(GetMaxRailSlope)));
+                    }
+
+                    //Target the Base Rail Cost (1000)
+                    //Note: 1000 is ldc.i4 1000
+                    if (codes[i].opcode == OpCodes.Ldc_I4 && (int)codes[i].operand == 1000)
+                    {
+                        codes[i] = new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(RailCostmap_Transpiler), nameof(GetBaseRailCost)));
+                    }
+                }
+                return codes;
+            }
+
+            public static float GetMaxRailSlope()
+            {
+                string value;
+                if (Library.ConfigVars.TryGetValue("height.railslope", out value))
+                {
+                    float num;
+                    if (float.TryParse(value, out num))
+                        return num;
+                }
+                return 20;
+            }
+            public static int GetBaseRailCost()
+            {
+
+                string value;
+                if (Library.ConfigVars.TryGetValue("height.railweight", out value))
+                {
+                    int num;
+                    if (int.TryParse(value, out num))
+                        return num;
+                }
+                return 1000;
+            }
+        }
+
         [HarmonyPatch(typeof(World), nameof(World.CanLoadFromDisk))]
         public static class World_CanLoadFromDisk
         {
@@ -573,6 +696,7 @@ namespace MapGenny
             private static void Prefix(ref string fileName)
             {
                 if (Library.png2cubes == true) { return; }
+                if (Library.breakprefab == true) { return; }
                 Library.RemoveTopology(Library.IsSwitchEnabled("height.roadtopology", false), Library.IsSwitchEnabled("height.railtopology", false));
                 if (Library.IsSwitchEnabled("height.mountainarctic", false))
                 {
@@ -607,7 +731,9 @@ namespace MapGenny
                 try
                 {
                     if (Library.png2cubes == true) { return; }
-#if !DEBUG
+                    if (Library.breakprefab == true) { return; }
+                    if (Library.DeleteCustomPrefabs == true)
+                    {
                     string extractPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CustomPrefabs");
                     if (Directory.Exists(extractPath))
                     {
@@ -617,7 +743,7 @@ namespace MapGenny
                         foreach (var subdirectory in subdirectories) { Directory.Delete(subdirectory, true); }
                         Directory.Delete(extractPath);
                     }
-#endif
+                    }
                 }
                 catch { }
                 Timing timer = new Timing("Image Generation");
@@ -664,16 +790,19 @@ namespace MapGenny
             static bool Prefix()
             {
                 Library.log = new UnifiedLogger();
-                ConsoleSystem.Run(ConsoleSystem.Option.Server.Quiet(), "skipAssetWarmup_crashes true", Array.Empty<object>()); //Speed up startup
                 Library.IP = Facepunch.Utility.CommandLine.GetSwitch("+server.ip", Facepunch.Utility.CommandLine.GetSwitch("-server.ip", "localhost"));
                 Library.Port = Facepunch.Utility.CommandLine.GetSwitch("+server.port", Facepunch.Utility.CommandLine.GetSwitch("-server.port", "28016"));
                 Library.HTTPSPort = Facepunch.Utility.CommandLine.GetSwitch("+server.queryport", Facepunch.Utility.CommandLine.GetSwitch("-server.queryport", "28015"));
                 Library.QuitPassword = Facepunch.Utility.CommandLine.GetSwitch("+rcon.password", Facepunch.Utility.CommandLine.GetSwitch("-rcon.password", "quit"));
-                Library.AllowUpload = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowuploads", Facepunch.Utility.CommandLine.GetSwitch("-allowuploads", "true")));
+                Library.AllowUpload = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowuploads", Facepunch.Utility.CommandLine.GetSwitch("-allowuploads", (Library.IP == "localhost" ? "true" : "false"))));
                 Library.AllowJobs = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowjobs", Facepunch.Utility.CommandLine.GetSwitch("-allowjobs", "true")));
                 Library.AllowCubes = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowcubes", Facepunch.Utility.CommandLine.GetSwitch("-allowcubes", "true")));
+                Library.AllowBreakPrefab = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowbreakprefab", Facepunch.Utility.CommandLine.GetSwitch("-allowbreakprefab", (Library.IP == "localhost" ? "true" : "false"))));
                 Library.CubesOnly = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+cubesonly", Facepunch.Utility.CommandLine.GetSwitch("-cubesonly", "false")));
-                if (Library.IP == "localhost") { Library.AllowUpload = true; }
+                Library.DeleteCustomPrefabs = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+deletecustomprefabs", Facepunch.Utility.CommandLine.GetSwitch("-deletecustomprefabs", "true")));
+#if DEBUG
+Library.DeleteCustomPrefabs = false;
+#endif
                 if (Library.IP.Contains("/"))
                 {
                     string[] urls = Library.IP.Split('/');
@@ -683,7 +812,6 @@ namespace MapGenny
                         if (!string.IsNullOrEmpty(u))
                         {
                             temp.Add("http://" + u + ":" + Library.Port + "/");
-                            // temp.Add("https://" + u + ":" + Library.HTTPSPort + "/");
                         }
                     }
                     Library.URL = temp.ToArray();
@@ -697,7 +825,8 @@ namespace MapGenny
                 if (Library.AllowCubes || Library.CubesOnly) { Library.PNG2CubesPage = Encoding.UTF8.GetBytes(Pages.PNG2Cubeshtml); }
                 if (!Library.CubesOnly)
                 {
-                    Library.MainPage = Encoding.UTF8.GetBytes(Pages.MainPagehtml); 
+                    Library.MainPage = Encoding.UTF8.GetBytes(Pages.MainPagehtml);
+                    if (!Library.AllowBreakPrefab) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""breakprefabBtn"" onclick=""window.location.href='/breakprefab'"">📦 BreakPrefab</button>", "")); }
                     if (!Library.AllowUpload) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""uploadBtn"" onclick=""window.location.href='/upload'"">📤 Upload Map</button>", "")); }
                     if (!Library.AllowCubes) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""png2cubesBtn"" onclick=""window.location.href='/png2cubes'"">🧊 Png2Cubes</button>", "")); }
                     if (!Library.AllowJobs) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""runJobsBtn"" onclick=""window.location.href='/jobs'"">🎯 Run Jobs</button>", "")); }
@@ -712,6 +841,7 @@ namespace MapGenny
                     }
                     if (Library.AllowUpload) { Library.UploadPage = Encoding.UTF8.GetBytes(Pages.UploadPagehtml); }
                 }
+                if (Library.AllowBreakPrefab) { Library.BreakPrefabPage = Encoding.UTF8.GetBytes(Pages.BreakPrefabHtml); }
                 Library.QuitPage = Encoding.UTF8.GetBytes(Pages.QuitPagehtml);
                 Library.PasswordPage = Encoding.UTF8.GetBytes(Pages.PasswordPagehtml);
                 Library.StartWebServer();
@@ -942,34 +1072,70 @@ namespace MapGenny
             //				if (!(component == null) && (ulong)World.Size >= (ulong)((long)component.MinWorldSize))
             //to
             //				if (!(component == null) && (ulong) World.Size >= (ulong)((long)0))
+
             public static IEnumerable<CodeInstruction> NOPMinSize(IEnumerable<CodeInstruction> instructions, bool PlaceMonuments = false)
             {
                 var codes = new List<CodeInstruction>(instructions);
                 bool Found1 = false;
                 for (int i = 0; i < codes.Count; i++)
                 {
-                    string ilCode = codes[i].ToString();
-                    if (ilCode.StartsWith("ldfld System.Int32 ") && ilCode.EndsWith("MinWorldSize"))
+                    // Check for the MinWorldSize field load
+                    bool isMinWorldSize = codes[i].opcode == OpCodes.Ldfld &&
+                                         codes[i].operand is FieldInfo fi &&
+                                         fi.Name == "MinWorldSize";
+
+                    if (isMinWorldSize)
                     {
-                        codes[i + 3].opcode = OpCodes.Nop;
-                        codes[i + 3].operand = null;
-                        Found1 = true;
-                        if (!PlaceMonuments) { break; }
+                        if (!Found1)
+                        {
+                            // Your working logic: NOP the branch 3 instructions ahead
+                            if (i + 3 < codes.Count)
+                            {
+                                codes[i + 3].opcode = OpCodes.Nop;
+                                codes[i + 3].operand = null;
+                            }
+                            Found1 = true;
+                            if (!PlaceMonuments) break;
+                            continue; // Move to next to avoid hitting the block below immediately
+                        }
+                        else
+                        {
+                            // Your working logic: Remove minsize limit on MonumentInfo
+                            // NOP the previous instruction and force this one to 0
+                            if (i > 0)
+                            {
+                                codes[i - 1].opcode = OpCodes.Nop;
+                                codes[i - 1].operand = null;
+                            }
+                            codes[i].opcode = OpCodes.Ldc_I4_0;
+                            codes[i].operand = null;
+                        }
                     }
-                    //Remove minsize limit on MonumentInfo
-                    if (Found1 && ilCode.StartsWith("ldfld System.Int32 ") && ilCode.EndsWith("MinWorldSize"))
+                    if (PlaceMonuments)
                     {
-                        codes[i - 1].opcode = OpCodes.Nop;
-                        codes[i - 1].operand = null;
-                        codes[i].opcode = OpCodes.Ldc_I4_0;
-                        codes[i].operand = null;
-                        break;
+                        if (i > 1 && i < codes.Count - 1 && codes[i].opcode == OpCodes.Ldc_I4_8 && codes[i - 1].opcode == OpCodes.Ldloc_S && codes[i + 1].opcode == OpCodes.Bge_S)
+                        {
+                            codes[i] = new CodeInstruction(OpCodes.Call, AccessTools.Method(typeof(MonumentMinSizeHelper), nameof(MonumentMinSizeHelper.MaxSpawnTries)));
+                        }
                     }
                 }
                 return codes;
             }
+
+            public static int MaxSpawnTries()
+            {
+                string value;
+                if (Library.ConfigVars.TryGetValue("height.spawnretries", out value))
+                {
+                    int num;
+                    if (int.TryParse(value, out num))
+                        return num;
+                }
+                return 8;
+            }
         }
-        #region Remove MinWordSize Limit
+
+#region Remove MinWordSize Limit
         //Remove Offical MinSize Limits
         [HarmonyPatch(typeof(PlaceMonuments), nameof(PlaceMonuments.Process))]
         internal static class PlaceMonuments_Process
@@ -1030,7 +1196,7 @@ namespace MapGenny
                 return MonumentMinSizeHelper.NOPMinSize(instructions);
             }
         }
-        #endregion
+#endregion
 
         [HarmonyPatch(typeof(Mountain))]
         internal static class MountainPatches
@@ -1233,6 +1399,7 @@ namespace MapGenny
             public static bool AllowUpload = false;
             public static bool AllowJobs = false;
             public static bool AllowCubes = false;
+            public static bool AllowBreakPrefab = false;
             public static bool CubesOnly = false;
             public static float MAP_BOUNDARY = 3800f;
             public static byte[] PasswordFromStaticMap = new byte[0]; //Store rustedit password from static.map
@@ -1256,6 +1423,8 @@ namespace MapGenny
             public static bool Generating = false;
             public static bool Restart = false;
             public static bool png2cubes = false;
+            public static bool breakprefab = false;
+            public static bool DeleteCustomPrefabs = true;
             public static bool HasPendingJobs = false;
             public static bool ForcePageRefresh = false;
             public static List<Job> pendingJobs = new List<Job>();
@@ -1269,12 +1438,16 @@ namespace MapGenny
             public static byte[] RestartPage = NoPage();
             public static byte[] UploadPage = NoPage();
             public static byte[] PNG2CubesPage = NoPage();
+            public static byte[] BreakPrefabPage = NoPage();
             public static byte[] MainPage = NoPage();
             public static byte[] PasswordPage = NoPage();
             public static byte[] JobsPage = NoPage();
             public static byte[] JobsPasswordPage = NoPage();
             public static byte[] QuitPage = NoPage();
             public static byte[] NoPageData = new byte[] { 0x4e, 0x6f, 0x20, 0x50, 0x61, 0x67, 0x65 };
+            public static List<PrefabData> prefabDataHolders = new List<PrefabData>(); //Found Parts
+            public static List<PrefabsLookup> Prefabs = new List<PrefabsLookup>(); //Lookup cache
+            public static uint[] badprefabs = new uint[] { 1691933837, 3016326660, 2258718098, 3602497669, 2143994463, 2753681398, 3883410568, 3102475981, 3961989670, 160023459, 3795442096, 3602562162, 2454147154, 2474674518, 3719018361, 859761354, 372348104, 2783201446, 4104640998, 1513347380, 3211242734, 2750475248, 348641088, 4288410176, 846665030, 3618221308, 878416551, 3036094912, 100799181, 483472417, 2168906204, 2018367643, 667569163, 1405372227, 610633799, 1916601365, 3286143640, 2817586779, 1241454585, 1555276165, 563716251, 1872469913, 2932091640, 798408797, 4041251023, 48768000, 733090214, 1139321003, 3727457272, 473932413, 2973722650, 1772634106, 4233295113, 2378432813, 3301012968, 3742716325, 167040888, 3240254756, 4112119478, 2317641213, 78591592, 3917524877, 710316454, 4024461339 };
             // Volcano IDs + offsets
             public static Dictionary<uint, Vector3> volcanoOffsets = new Dictionary<uint, Vector3>
                 {
@@ -1375,6 +1548,39 @@ namespace MapGenny
             { '9', 0.175f }
             };
 
+            public class PrefabsLookup
+            {
+                public PrefabsLookup(string name, string path = "")
+                {
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        prefabName = name;
+                        rustID = StringPool.Get(path);
+                        if (rustID == 0) //No ID found by path so try to find closest match
+                        {
+                            if (name.Length > 5)
+                            {
+                                foreach (string s in StringPool.toString.Values)
+                                {
+                                    if (s.Contains(name) && !s.Contains("/autospawn/monument"))
+                                    {
+                                        rustID = StringPool.Get(s);
+                                        if (BadPrefab(rustID))  //Dont use bad prefabs
+                                        {
+                                            rustID = 0;
+                                            continue;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                public string prefabName;
+                public uint rustID;
+            }
+
             public static Dictionary<Color, uint> GetPredefinedColors(List<string> strings)
             {
                 var predefinedColors = new Dictionary<Color, uint>();
@@ -1439,6 +1645,9 @@ namespace MapGenny
                 [JsonProperty("height.langle")]
                 public int HeightLAngle { get; set; }
 
+                [JsonProperty("height.spawnretries")]
+                public int HeightSpawnRetires { get; set; }
+
                 [JsonProperty("height.edge")]
                 public bool HeightEdge { get; set; }
 
@@ -1498,6 +1707,18 @@ namespace MapGenny
 
                 [JsonProperty("height.trailwidth")]
                 public int HeightTrailWidth { get; set; }
+
+                [JsonProperty("height.roadslope")]
+                public int HeightRoadSlope { get; set; }
+
+                [JsonProperty("height.roadweight")]
+                public int HeightRoadWeight { get; set; }
+
+                [JsonProperty("height.railslope")]
+                public int HeightRailSlope { get; set; }
+
+                [JsonProperty("height.railweight")]
+                public int HeightRailWeight { get; set; }
 
                 [JsonProperty("height.raildepth")]
                 public int HeightRailDepth { get; set; }
@@ -1620,7 +1841,7 @@ namespace MapGenny
                 public string WcPrefabWhitelist { get; set; }
             }
 
-            #region Functions
+#region Functions
             public static byte[] NoPage() { return NoPageData; }
 
             public static void RestartServer()
@@ -1992,7 +2213,7 @@ namespace MapGenny
 
                 // Snow SETTINGS
                 float gridRadius = 144f;     // Total coverage area around the point
-                float step = 12f;            // Spacing between snow prefabs (12m render dist → place multiple)
+                float step = 12f;            // Spacing between snow prefabs (12m render dist place multiple)
                 float heightOffset = 7f;     // Place effect 5m above terrain
 
                 for (int i = 0; i < prefablist.Count; i++)
@@ -2102,17 +2323,26 @@ namespace MapGenny
                     //  OIL RIG IN-GRID LIMITING
                     if (doOilrig && (id == OILRIG_1 || id == OILRIG_2))
                     {
-                        var pos = pd.position;
-                        float maxClamp = Mathf.Min(halfSize, oilLimit);
-                        float x = Mathf.Clamp(pos.x, -maxClamp, maxClamp);
-                        float z = Mathf.Clamp(pos.z, -maxClamp, maxClamp);
-                        if (x != pos.x || z != pos.z)
+                        Vector3 oceanposition = GenerateDungeonBase_Process_Patch.GetUniqueOceanPosition();
+                        if (oceanposition == Vector3.zero)
                         {
-                            pd.position = new Vector3(x, pos.y, z);
-                            prefablist[i] = pd;
-
-                            Console.WriteLine($"[Moved oil rig {id} from ({pos.x:F1}, {pos.z:F1}) → ({x:F1}, {z:F1})]");
+                            var pos = pd.position;
+                            float maxClamp = Mathf.Min(halfSize, oilLimit);
+                            float x = Mathf.Clamp(pos.x, -maxClamp, maxClamp);
+                            float z = Mathf.Clamp(pos.z, -maxClamp, maxClamp);
+                            if (x != pos.x || z != pos.z)
+                            {
+                                pd.position = new Vector3(x, pos.y, z);
+                                prefablist[i] = pd;
+                            }
                         }
+                        else
+                        {
+                            oceanposition.y = 0;
+                            pd.position = oceanposition;
+                            prefablist[i] = pd;
+                        }
+                        Console.WriteLine($"[Moved oil rig {id} to ({pd.position.x:F1}, {pd.position.z:F1})]");
                     }
 
                     //  ADS TEXT PLACEMENT
@@ -2637,15 +2867,45 @@ namespace MapGenny
             }
 
             //Dump function for debug build to save Texture2D
-            private static void SaveMapData(string path, Texture2D texture)
+            private static void SaveMapData(string path, Texture2D texture, string fullname)
             {
-                string fullPath = Path.Combine("CustomPrefabs", path);
+                string root = GetCustomRoot(fullname, path);
+                string fileName = Path.GetFileName(path);
+                string fullPath = Path.Combine(root, fileName);
+
+                if (!Directory.Exists(root)) Directory.CreateDirectory(root);
+
                 if (!File.Exists(fullPath))
                 {
-                    string directoryPath = Path.GetDirectoryName(fullPath);
-                    if (!string.IsNullOrEmpty(directoryPath) && !Directory.Exists(directoryPath)) { Directory.CreateDirectory(directoryPath); }
-                    if (fullPath.Contains("height")) { texture?.SaveAsPng(fullPath); DumpRaw(fullPath.Replace(".png", ".raw"), texture); }
-                    else { texture?.SaveAsPng(fullPath); }
+                    texture?.SaveAsPng(fullPath);
+                    if (fullPath.Contains("height"))
+                    {
+                        DumpRaw(Path.ChangeExtension(fullPath, ".raw"), texture);
+                    }
+                }
+            }
+
+            private static void SavePrefabData(string path, string fullname, uint prefabID, Vector4 settings, bool isMonument)
+            {
+                string root = GetCustomRoot(fullname , path);
+                if (!Directory.Exists(root)) Directory.CreateDirectory(root);
+
+                string mapPath = Path.Combine(root, "prefab.map");
+                string infoPath = Path.Combine(root, "prefab.info");
+
+                if (!File.Exists(mapPath))
+                {
+                    var newworld = InitializeWorldSerialization();
+                    newworld.world.prefabs.Add(new PrefabData() { category = "Decor", id = prefabID, position = Vector3.zero, rotation = Vector3.zero, scale = Vector3.one });
+                    png2cubes = true;
+                    newworld.Save(mapPath);
+                    png2cubes = false;
+                }
+
+                if (!File.Exists(infoPath))
+                {
+                    // Format: Size | Offset | Radius/Fade | Fade
+                    File.WriteAllText(infoPath, $"{settings.x} | {settings.y} | {settings.z} | {settings.w}");
                 }
             }
 #endif
@@ -2672,8 +2932,7 @@ namespace MapGenny
             //Dump function for debug build to save Prefabs to prefabs.map
             private static void SavePrefabData(string path, Monument monument)
             {
-                path = path.Replace("heighttexture.png", "prefab.map");
-                string fullPath = Path.Combine("CustomPrefabs", path);
+                string fullPath = Path.Combine("CustomPrefabs", monument.fullName);
                 if (!File.Exists(fullPath))
                 {
                     var newworld = InitializeWorldSerialization();
@@ -2703,11 +2962,12 @@ namespace MapGenny
             }
 #endif
 
-            private static TextureData LoadMapData(string path, Texture2D texture, TextureData originalData)
+            private static TextureData LoadMapData(string path, Texture2D texture, TextureData originalData, string fullname)
             {
 #if !DEBUG
-                //If Texture2D exsists in customprefabs file structure load and use that instead of facepunches
-                string fullPath = Path.Combine("CustomPrefabs", path);
+                string root = GetCustomRoot(fullname, path);
+                string fileName = Path.GetFileName(path);
+                string fullPath = Path.Combine(root, fileName);
                 if (File.Exists(fullPath))
                 {
                     try
@@ -2716,25 +2976,52 @@ namespace MapGenny
                         newTexture.LoadImage(File.ReadAllBytes(fullPath));
                         return new TextureData(newTexture);
                     }
-                    catch (Exception ex) { Console.WriteLine(ex.Message); }
+                    catch (Exception ex) { Console.WriteLine($"Error loading PNG: {ex.Message}"); }
                 }
-                fullPath = fullPath.Replace(".png", ".raw");
-                if (File.Exists(fullPath))
+
+                string rawPath = Path.ChangeExtension(fullPath, ".raw");
+                if (File.Exists(rawPath))
                 {
                     try
                     {
-                        byte[] rawhight = File.ReadAllBytes(fullPath);
-                        for (int i = 0; i < rawhight.Length - 2;)
+                        byte[] rawHeight = File.ReadAllBytes(rawPath);
+                        // Process bytes into the originalData color array
+                        for (int i = 0; i < rawHeight.Length; i += 2)
                         {
-                            originalData.colors[i / 2] = BitUtility.EncodeShort(BitConverter.ToInt16(new byte[] { rawhight[i], rawhight[i + 1] }, 0));
-                            i += 2;
+                            // Ensure we don't go out of bounds of the color array
+                            int colorIndex = i / 2;
+                            if (colorIndex < originalData.colors.Length)
+                            {
+                                short rawValue = BitConverter.ToInt16(rawHeight, i);
+                                originalData.colors[colorIndex] = BitUtility.EncodeShort(rawValue);
+                            }
                         }
                         return originalData;
                     }
-                    catch (Exception ex) { Console.WriteLine(ex.Message); }
+                    catch (Exception ex) { Console.WriteLine($"Error loading RAW: {ex.Message}"); }
                 }
 #endif
                 return originalData;
+            }
+
+            private static string GetCustomRoot(string fullname, string path)
+            {
+                // If we have a name, use it (cleaned of extensions)
+                if (!string.IsNullOrEmpty(fullname))
+                {
+                    string cleanName = fullname.Replace(".prefab", "").Replace(".map", "");
+                    return Path.Combine("CustomPrefabs", cleanName);
+                }
+
+                // Fallback: Use the directory of the texture path (e.g., "assets/textures/height.png"  "assets/textures")
+                if (!string.IsNullOrEmpty(path))
+                {
+                    string pathDir = Path.GetDirectoryName(path);
+                    return Path.Combine("CustomPrefabs", pathDir ?? "");
+                }
+
+                // Absolute Fallback: Just the root folder
+                return "CustomPrefabs";
             }
 
             public static Vector3 ParseVector3(string vectorString)
@@ -2759,20 +3046,31 @@ namespace MapGenny
                 );
             }
 
-            private static void LoadPrefabData(string path, object obj)
+            private static void LoadPrefabData(string path, object obj, string fullname)
             {
                 Monument monument = obj as Monument;
                 Mountain mountain = obj as Mountain;
-                uint prefabId = ((monument != null) ? monument.prefabID : mountain.prefabID);
-                if (prefabId == 0) { return; }
-                //Find prefabs.map in the same file structure as a monument. Load and store that to apply later.
-                path = path.Replace("heighttexture.png", "prefab.map");
-                string fullPath = Path.Combine("CustomPrefabs", path);
-                if (File.Exists(fullPath) && !CustomMapPrefabs.ContainsKey(prefabId))
+                uint prefabId = (monument != null) ? monument.prefabID : mountain?.prefabID ?? 0;
+
+                if (prefabId == 0) return;
+
+                string root = GetCustomRoot(fullname, path);
+                string mapPath = Path.Combine(root, "prefab.map");
+                string infoPath = Path.Combine(root, "prefab.info");
+
+                if (File.Exists(mapPath) && !CustomMapPrefabs.ContainsKey(prefabId))
                 {
                     var tempLoad = new WorldSerialization();
-                    try { tempLoad.Load(fullPath); }
-                    catch { return; }
+                    try
+                    {
+                        tempLoad.Load(mapPath);
+                    }
+                    catch
+                    {
+                        // Log error here if needed
+                        return;
+                    }
+
                     int PC = tempLoad.world?.prefabs != null ? tempLoad.world.prefabs.Count : 0;
                     var customPrefab = new CustomPrefab
                     {
@@ -2789,23 +3087,31 @@ namespace MapGenny
                     };
                     CustomMapPrefabs.Add(prefabId, customPrefab);
                 }
-                fullPath = fullPath.Replace(".map", ".info");
-                if (File.Exists(fullPath))
+
+                if (File.Exists(infoPath))
                 {
-                    //monument.size + " | " + monument.offset + " | " + monument.Radius + " | " + monument.Fade
-                    string[] settings = File.ReadAllText(fullPath).Split(new string[] { " | " }, StringSplitOptions.None);
-                    if (monument != null)
+                    try
                     {
-                        monument.Fade = float.Parse(settings[3]);
-                        monument.Radius = float.Parse(settings[2]);
-                        monument.offset = ParseVector3(settings[1]);
-                        monument.size = ParseVector3(settings[0]);
+                        string content = File.ReadAllText(infoPath);
+                        string[] settings = content.Split(new string[] { " | " }, StringSplitOptions.None);
+
+                        if (monument != null)
+                        {
+                            monument.size = ParseVector3(settings[0]);
+                            monument.offset = ParseVector3(settings[1]);
+                            monument.Radius = float.Parse(settings[2]);
+                            monument.Fade = float.Parse(settings[3]);
+                        }
+                        else if (mountain != null)
+                        {
+                            mountain.size = ParseVector3(settings[0]);
+                            mountain.offset = ParseVector3(settings[1]);
+                            mountain.Fade = float.Parse(settings[3]);
+                        }
                     }
-                    else
+                    catch (Exception ex)
                     {
-                        mountain.Fade = float.Parse(settings[3]);
-                        mountain.offset = ParseVector3(settings[1]);
-                        mountain.size = ParseVector3(settings[0]);
+                        UnityEngine.Debug.LogError($"Failed to parse info file for {fullname}: {ex.Message}");
                     }
                 }
             }
@@ -2883,39 +3189,33 @@ namespace MapGenny
 
             private static TextureData OverrideMapData(Texture2D texture, string path, Monument monument, TextureData originalData)
             {
-#if DEBUG
-
-            SaveMapData(path, texture);
-#endif
                 if (monument != null)
                 {
 #if DEBUG
-                SavePrefabData(path, monument);
+                    SaveMapData(path, texture, monument.fullName);
+                    SavePrefabData(path, monument.fullName, monument.prefabID, new Vector4(0, 0, monument.Radius, monument.Fade), true);
 #else
-                    LoadPrefabData(path, monument);
+                    LoadPrefabData(path, monument, monument.fullName);
 #endif
                 }
-                return LoadMapData(path, texture, originalData);
+                return LoadMapData(path, texture, originalData, monument?.fullName);
             }
             private static TextureData OverrideMapDataMountain(Texture2D texture, string path, Mountain mountain, TextureData originalData)
             {
-#if DEBUG
-
-                SaveMapData(path, texture);
-#endif
                 if (mountain != null)
                 {
 #if DEBUG
+                    SaveMapData(path, texture, mountain.fullName);
                     SavePrefabDataMountain(path, mountain);
 #else
-                    LoadPrefabData(path, mountain);
+                    LoadPrefabData(path, mountain, mountain.fullName);
 #endif
                 }
-                return LoadMapData(path, texture, originalData);
+                return LoadMapData(path, texture, originalData, mountain?.fullName);
             }
-            #endregion
+#endregion
 
-            #region Methods
+#region Methods
             public static void CutEdges(ref NativeArray<short> height, int pixels, short depth)
             {
                 int HeightRes = TerrainGenerator.GetHeightMapRes();
@@ -3181,11 +3481,22 @@ namespace MapGenny
                             await HandleCubesUpload(ctx).ConfigureAwait(false);
                         }
                     }
+                    else if (path.StartsWith("/breakprefab", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (ctx.Request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
+                        {
+                            await ServeBreakHtml(ctx).ConfigureAwait(false);
+                        }
+                        else if (ctx.Request.HttpMethod.Equals("POST", StringComparison.OrdinalIgnoreCase))
+                        {
+                            await HandleBreakUpload(ctx).ConfigureAwait(false);
+                        }
+                    }
                     else if (path.StartsWith("/jobs", StringComparison.OrdinalIgnoreCase))
                     {
                         if (path.EndsWith(".map", StringComparison.OrdinalIgnoreCase))
                         {
-                            // Decode any URL-encoded characters (e.g. %20 → space)
+                            // Decode any URL-encoded characters (e.g. %20  space)
                             string decodedPath = Uri.UnescapeDataString(path);
 
                             // Build the correct absolute file path
@@ -3365,7 +3676,7 @@ namespace MapGenny
                         {
                             HeightPngData = bodyBytes;
                         }
-                        else if (fieldName == "height.customprefabs")
+                        else if (fieldName == "customPrefabFile")
                         {
                             PrefabsZipData = bodyBytes;
                         }
@@ -3695,6 +4006,132 @@ namespace MapGenny
                 }
             }
 
+            private static async Task HandleBreakUpload(HttpListenerContext ctx)
+            {
+                string DownloadURL = "";
+                try
+                {
+                    if (!ctx.Request.ContentType?.StartsWith("multipart/form-data") ?? true)
+                        throw new Exception("Invalid content type.");
+
+                    var boundary = ctx.Request.ContentType.Split(new string[] { "boundary=" }, StringSplitOptions.None)[1];
+                    var boundaryBytes = Encoding.UTF8.GetBytes("--" + boundary);
+
+                    var memoryStream = new MemoryStream();
+                    await ctx.Request.InputStream.CopyToAsync(memoryStream);
+                    var requestData = memoryStream.ToArray();
+
+                    string prefabValue = "";
+                    int pos = 0;
+                    while (pos < requestData.Length)
+                    {
+                        int boundaryIndex = IndexOf(requestData, boundaryBytes, pos);
+                        if (boundaryIndex == -1) break;
+
+                        int headersStart = boundaryIndex + boundaryBytes.Length;
+                        if (requestData.Length > headersStart + 2 && requestData[headersStart] == '\r' && requestData[headersStart + 1] == '\n')
+                            headersStart += 2;
+
+                        int headersEnd = IndexOf(requestData, Encoding.UTF8.GetBytes("\r\n\r\n"), headersStart);
+                        if (headersEnd == -1) break;
+
+                        string headers = Encoding.UTF8.GetString(requestData, headersStart, headersEnd - headersStart);
+                        int contentStart = headersEnd + 4;
+
+                        int nextBoundary = IndexOf(requestData, boundaryBytes, contentStart);
+                        if (nextBoundary == -1) nextBoundary = requestData.Length;
+
+                        int contentEnd = nextBoundary;
+                        while (contentEnd > contentStart && (requestData[contentEnd - 1] == '\n' || requestData[contentEnd - 1] == '\r'))
+                            contentEnd--;
+
+                        int contentLength = contentEnd - contentStart;
+                        if (contentLength < 0) contentLength = 0;
+
+                        byte[] content = new byte[contentLength];
+                        Array.Copy(requestData, contentStart, content, 0, contentLength);
+
+                        if (headers.Contains("name=\"prefab\""))
+                        {
+                            prefabValue = Encoding.UTF8.GetString(content).Trim();
+                        }
+                        pos = nextBoundary;
+                    }
+
+                    bool isUint = prefabValue.All(char.IsDigit);
+                    if (isUint && uint.TryParse(prefabValue, out uint prefabId))
+                    {
+                        Console.WriteLine($"Breaking prefab by ID: {prefabId}");
+                        Respond(Breaker("", prefabId), ctx);
+                    }
+                    else
+                    {
+                        Console.WriteLine($"Breaking prefab by path: {prefabValue}");
+                        Respond(Breaker(prefabValue, 0), ctx);
+                    }
+                }
+                catch { }
+            }
+
+            public static void Respond(string finalPath, HttpListenerContext ctx)
+            {
+                string DownloadURL = null;
+                try { 
+                        // Logic resumes once Coroutine calls SetResult
+                        if (string.IsNullOrEmpty(finalPath))
+                        {
+                            DownloadURL = "Error breaking: returned null path.";
+                        }
+                        else
+                        {
+                            DownloadURL = BlobDownload(finalPath);
+                        }
+                    
+                }
+                catch (Exception ex)
+                {
+                    DownloadURL = $"Error processing break request: {ex.Message}";
+                }
+
+                // Now that the data is ready, send the response
+                try
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "text/plain";
+                    var bytes = Encoding.UTF8.GetBytes(DownloadURL);
+                    ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
+                }
+                finally
+                {
+                    ctx.Response.Close();
+                }
+            }
+
+            public static string BlobDownload(string filePath)
+            {
+                string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
+                filePath = Path.Combine(baseDirectory, filePath);
+                Console.Write(filePath);
+                if (File.Exists(filePath))
+                {
+                    try
+                    {
+                        byte[] fileBytes = File.ReadAllBytes(filePath);
+                        string base64String = Convert.ToBase64String(fileBytes);
+                        string contentType = "application/octet-stream";
+                        return $"data:{contentType};base64,{base64String}";
+                    }
+                    catch (Exception ex)
+                    {
+                        return $"Error reading file: {ex.Message}";
+                    }
+                }
+                else
+                {
+                    return "Error: File not found on server.";
+                }
+            }
+
             public static Bitmap ProcessImage(byte[] imageBytes, int targetWidth, int targetHeight, double smoothing, bool rotate)
             {
                 using (var ms = new MemoryStream(imageBytes))
@@ -3908,6 +4345,8 @@ namespace MapGenny
             private static async Task ServeUploadHtml(HttpListenerContext ctx) { await SafeWrite(ctx.Response, UploadPage, "text/html"); }
 
             private static async Task ServeCubesHtml(HttpListenerContext ctx) { await SafeWrite(ctx.Response, PNG2CubesPage, "text/html"); }
+
+            private static async Task ServeBreakHtml(HttpListenerContext ctx) { await SafeWrite(ctx.Response, BreakPrefabPage, "text/html"); }
 
             private static async Task HandleJobsUpload(HttpListenerContext ctx)
             {
@@ -4885,7 +5324,241 @@ namespace MapGenny
                 var shoredepth = float.Parse(GetSwitch("height.cargomin", "8"));
                 SaveCargoPath(BaseBoat.GenerateOceanPatrolPath(shoredistance, shoredepth), "oceanpathpoints");
             }
-            #endregion
+
+            
+            public static string Breaker(string prefab = "", uint PrefabID = 0)
+            {
+                //Likely wont work on a lot of prefabs and may crash since only the main thread can load asset bundles correctly.
+                //Would have to completely change the way its done. Such as create a blank map with just that prefab on it. Then start server with that map so main thread spawns everything.
+                //Then restart server after it creates a dump.
+                breakprefab = true;
+                uint PID = PrefabID;
+                if (!string.IsNullOrEmpty(prefab)) { PID = StringPool.Get(prefab); }
+                if (PID == 0) { return "No PrefabID or Path Found!"; }
+                AssetBundleBackend assetBundleBackend = FileSystem.Backend as AssetBundleBackend;
+                List<string> Assets = assetBundleBackend.GetRequiredAssetScenesForPrefabs(new List<string>() { StringPool.Get(PID) });
+                if (!AssetSceneManifest.Current.AutoLoadScenes.Contains(Assets[0]))
+                {
+                    Console.WriteLine("\nLoading Bundle: " + Assets[0]);
+                    AssetSceneManifest.Current.AutoLoadScenes.Add(Assets[0]);
+                     assetBundleBackend.Load(Assets[0]);
+                }
+
+                // Refresh the File Index to ensure the Backend knows about the new assets
+                assetBundleBackend.BuildFileIndex();
+
+                // Now try to load
+                var gameObject = assetBundleBackend.LoadPrefab(StringPool.Get(PID));
+
+                prefabDataHolders.Clear();
+                if (Prefabs.Count == 0) { Prefabs = BuildCache(); }
+                if (gameObject == null)
+                {
+                    Console.WriteLine("Setting Up Game Object");
+                    try{gameObject = GameManager.server.CreatePrefab(StringPool.Get(PID), Vector3.zero, Quaternion.identity, true);}catch { }
+                    if (gameObject == null)
+                    {
+                        try
+                        {
+                            Prefab monument = Prefab.Load(PID);
+                            if (monument == null)
+                            {
+                                Console.WriteLine("Unable to load Prefab ID " + PID);
+                                breakprefab = false;
+                                return null;
+                            }
+                              gameObject = UnityEngine.Object.Instantiate<GameObject>(monument);
+                        }
+                        catch { }
+                    }
+
+                    if (gameObject == null)
+                    {
+                        Console.WriteLine("Unable to load Game Object");
+                        breakprefab = false;
+                        return null;
+                    }
+                }
+                string[] prefabname = gameObject.name.Split('/');
+                string MapName = prefabname[prefabname.Length - 1].Replace(".prefab", ".map");
+                string filepath = Path.Combine("server", ConVar.Server.identity, MapName);
+
+                gameObject.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+                gameObject.SetActive(true);
+                int loops = 0;
+                int count = 0;
+                var allChildren = gameObject.transform.GetAllChildren().ToList();
+                int max = allChildren.Count;
+                int msg = max / 15;
+                foreach (var child in allChildren)
+                {
+                    count++;
+                    if (child == null) continue;
+
+                    if (loops++ >= msg)
+                    {
+                        loops = 0;
+                        Console.WriteLine($"Breaking Prefabs: {((float)count / max * 100):N0}%");
+                    }
+
+                    var element = Find(child.name);
+                    if (element != null)
+                    {
+                        PrefabData prefabData = new PrefabData
+                        {
+                            id = element.rustID,
+                            category = "decor",
+                            rotation = child.transform.rotation,
+                            position = child.transform.position,
+                            scale = child.transform.localScale
+                        };
+                        prefabDataHolders.Add(prefabData);
+                    }
+                }
+                // Deduplication logic
+                var prefabDataHoldersclean = new List<PrefabData>();
+                foreach (var pd in prefabDataHolders)
+                {
+                    if (GarbageCollection(pd) || BadPrefab(pd.id)) continue;
+                    bool dupe = false;
+                    foreach (var pc in prefabDataHoldersclean)
+                    {
+                        if (DupeCheck(pd, pc)) { dupe = true; break; }
+                    }
+                    if (!dupe) prefabDataHoldersclean.Add(pd);
+                }
+                Console.WriteLine("Break Done, Creating " + prefabDataHoldersclean.Count + " Prefab Pieces");
+                WorldSerialization worldSerialization = InitializeWorldSerialization();
+                worldSerialization.world.size = 1;
+                foreach (var prefabDataHolder in prefabDataHoldersclean)
+                {
+                    prefabDataHolder.id = StringPool.Get(ReplacePrefab(StringPool.Get(prefabDataHolder.id)));
+                    worldSerialization.world.prefabs.Add(prefabDataHolder);
+                }
+                worldSerialization.Save(filepath);
+                // Cleanup
+                GameObject.Destroy(gameObject);
+                foreach (var be in BaseNetworkable.serverEntities.entityList.Get().Values) { if (be != null) { be.Kill(); } }
+                BaseNetworkable.serverEntities.entityList.Get().Clear();
+
+                Rust.Application.isLoading = false;
+                breakprefab = false;
+
+                return filepath;
+            }
+
+        //Check that doesnt have same ID, Position and Roation.
+        private static bool DupeCheck(PrefabData pd, PrefabData pc)
+            {
+                if (pc.id == pd.id && pc.position.x == pd.position.x && pc.position.y == pd.position.y && pc.position.z == pd.position.z && pc.rotation.x == pd.rotation.x && pc.rotation.y == pd.rotation.y && pc.rotation.z == pd.rotation.z) { return true; }
+                return false;
+            }
+
+            //Check its not at GC position for packet monuments y -0.5 (scripts and stuff)
+            private static bool GarbageCollection(PrefabData pd)
+            {
+                if (pd.position.x == 0 && (pd.position.y == -0.5f || pd.position.y == 0f) && pd.position.z == 0 && pd.rotation.x == 0 && pd.rotation.y == 0 && pd.rotation.z == 0) { return true; } 
+                return false;
+            }
+
+            //Some useless prefabs that can cause issues
+            private static bool BadPrefab(uint ID)
+            {
+                if (badprefabs.Contains(ID)) { return true; } 
+                return false;
+            }
+
+            //Replace IO Entitys with ones that can be used in rustedit
+            private static string ReplacePrefab(string orignal)
+            {
+                switch (orignal)
+                {
+                    case "assets/content/props/big_button/big_button.prefab":
+                        return "assets/prefabs/io/electric/switches/pressbutton/pressbutton.prefab";
+                    case "assets/content/props/fusebox/fusebox.prefab":
+                        return "assets/prefabs/io/electric/switches/fusebox/fusebox.prefab";
+                    case "assets/prefabs/io/electric/switches/xorswitch.prefab":
+                        return "assets/prefabs/deployable/playerioents/gates/xorswitch/xorswitch.entity.prefab";
+                }
+                return orignal;
+            }
+
+            //Try get prefab by name
+            public static PrefabsLookup Find(string name)
+            {
+                string Fix = name;
+                name = name.Split(' ', (char)StringSplitOptions.None).First<string>().ToLower();
+                string b = name.Replace("_", " ");
+
+                // 1. Search existing list first
+                foreach (var prefabsListElement in Prefabs)
+                {
+                    if (prefabsListElement.prefabName == b || prefabsListElement.prefabName == name)
+                    {
+                        return prefabsListElement;
+                    }
+                }
+
+                // 2. Clean up name for specialized cases
+                Fix = Fix.ToLower()
+                    .Replace("rcd_a_", "").Replace("rcd_b_", "").Replace("rcd_c_", "").Replace("rcd_d_", "")
+                    .Replace("gcd_a_", "").Replace("gcd_b_", "").Replace("_upstairs", "").Replace("_downstairs", "")
+                    .Replace("_", " ");
+
+                Fix = Fix.Split(' ').First<string>();
+
+                // 3. Handle specialized prefabs
+                switch (Fix)
+                {
+                    case string a when a.Contains("ladder"):
+                        return new PrefabsLookup(Fix, "assets/bundled/prefabs/modding/volumes_and_triggers/ladder_trigger.prefab");
+
+                    case string a when a.Contains("xorswitch"):
+                        return new PrefabsLookup(Fix, "assets/prefabs/deployable/playerioents/gates/xorswitch/xorswitch.entity.prefab");
+
+                    case string a when a.Contains("cardreader"):
+                        return new PrefabsLookup(Fix, "assets/prefabs/io/electric/switches/cardreader.prefab");
+
+                    case string a when a.Contains("simpleswitch"):
+                        return new PrefabsLookup(Fix, "assets/prefabs/io/electric/switches/simpleswitch/simpleswitch.prefab");
+
+                    case string a when a.Contains("lightswitch"):
+                        return new PrefabsLookup(Fix, "assets/prefabs/io/electric/switches/simpleswitch_lightswitch/simpleswitch_lightswitch.prefab");
+
+                    case string a when a.Contains("simplelight"):
+                        return new PrefabsLookup(Fix, "assets/prefabs/io/electric/lights/simplelight.prefab");
+
+                    case string a when a.Contains("pressbutton"):
+                        return new PrefabsLookup(Fix, "assets/prefabs/io/electric/switches/pressbutton/pressbutton.prefab");
+
+                    case string a when a.Contains("door.hinged.security.green"):
+                        return new PrefabsLookup(Fix, "assets/bundled/prefabs/static/door.hinged.security.green.prefab");
+
+                    case string a when a.Contains("door.hinged.security.blue"):
+                        return new PrefabsLookup(Fix, "assets/bundled/prefabs/static/door.hinged.security.blue.prefab");
+
+                    case string a when a.Contains("door.hinged.security.red"):
+                        return new PrefabsLookup(Fix, "assets/bundled/prefabs/static/door.hinged.security.red.prefab");
+                }
+
+                return new PrefabsLookup(Fix, "");
+            }
+
+            //Build list of prefabs from stringpool
+            public static List<PrefabsLookup> BuildCache()
+            {
+                List<PrefabsLookup> list = new List<PrefabsLookup>();
+                IEnumerable<string> enumerable = from x in StringPool.toString.Values where x.EndsWith(".prefab") select x;
+                foreach (string text in enumerable) //Build lookup
+                {
+                    string[] array = text.ToLower().Split('/', (char)StringSplitOptions.None); //seperate path
+                    list.Add(new PrefabsLookup(array.LastOrDefault<string>().Replace(".prefab", "").Replace("_", " "), text));
+                }
+                return list;
+            }
+
+
+#endregion
         }
 
         public class CustomPrefab
@@ -5411,6 +6084,7 @@ input.invalid, select.invalid, textarea.invalid {
 <button class=""theme-toggle"" id=""themeToggle"">🌙 Dark Mode</button>
 <div class=""right-buttons"">
 <button class=""upload-btn"" id=""png2cubesBtn"" onclick=""window.location.href='/png2cubes'"">🧊 Png2Cubes</button>
+<button class=""upload-btn"" id=""breakprefabBtn"" onclick=""window.location.href='/breakprefab'"">📦 BreakPrefab</button>
 <button class=""upload-btn"" id=""runJobsBtn"" onclick=""window.location.href='/jobs'"">🎯 Run Jobs</button>
 <button class=""upload-btn"" id=""uploadBtn"" onclick=""window.location.href='/upload'"">📤 Upload Map</button>
 <button class=""upload-btn"" id=""quitBtn"">💀 Shut Down</button>
@@ -5451,6 +6125,7 @@ input.invalid, select.invalid, textarea.invalid {
 <div class='form-group'><label>Water Map Height</label><input type='number' name='height.water' value='500' min='1' max='700' required></div>
 <div class='form-group'><label>Biome Angle (0 = N-W, 90 = E-W, 180 = W-N, 270 = W-E for Cold - Arid)</label><input type='number' name='height.bangle' value='180' min='0' max='360' required></div>
 <div class='form-group'><label>Tier/Loot Angle (0 = N-W, 90 = E-W, 180 = W-N, 270 = W-E for T3-T1 monuments)</label><input type='number' name='height.langle' value='359' min='0' max='360' required></div>
+<div class='form-group'><label>Monument Spawn Retries</label><input type='number' name='height.spawnretries' value='8' min='4' max='256' required></div>
 </fieldset>
 <!-- Edge & Topology Options -->
 <fieldset>
@@ -5483,6 +6158,10 @@ input.invalid, select.invalid, textarea.invalid {
 <legend>Road, Trail Widths & Underground Rail</legend>
 <div class='form-group'><label>Road Width</label><input type='number' name='height.roadwidth' value='10' min='0' max='50' required></div>
 <div class='form-group'><label>Trail Width (Greater then 4 turns it into a road)</label><input type='number' name='height.trailwidth' value='4' min='0' max='50' required></div>
+<div class='form-group'><label>Road Max Slop</label><input type='number' name='height.roadslope' value='20' min='5' max='90' required></div>
+<div class='form-group'><label>Road Pathing Cost</label><input type='number' name='height.roadweight' value='5000' min='100' max='99999' required></div>
+<div class='form-group'><label>Rail Max Slop</label><input type='number' name='height.railslope' value='30' min='5' max='90' required></div>
+<div class='form-group'><label>Rail Pathing Cost</label><input type='number' name='height.railweight' value='1000' min='100' max='99999' required></div>
 <div class='form-group'><label>Underground Rail Depth (Will snap to nearest rail grid height on spawn)</label><input type='number' name='height.raildepth' value='3' min='3' max='360' step='3' required id='railDepthInput'></div>
 </fieldset>
 <!-- River & Water Settings -->
@@ -5590,6 +6269,7 @@ document.addEventListener('DOMContentLoaded', () => {
     uploadBtn.addEventListener('click', () => window.location.href = '/upload');
     }
   const png2cubesBtn = document.getElementById('png2cubesBtn');
+  const breakprefabBtn = document.getElementById('breakprefabBtn');
   const previewImg = document.getElementById('previewImg');
   const consoleBox = document.getElementById('consoleBox');
   const runtimeBox = document.getElementById('runtimeBox');
@@ -5802,6 +6482,7 @@ function validateForm() {
   });
   quitBtn.addEventListener('click', () => { if (!confirm('Are you sure you want to shutdown the server')) { return; } window.location.href = '/quit'; });
   png2cubesBtn.addEventListener('click', () => window.location.href = '/png2cubes');
+  breakprefabBtn.addEventListener('click', () => window.location.href = '/breakprefab');
   runJobsBtn.addEventListener('click', () => window.location.href = '/jobs');
 if (imageModal && modalImg) {
   const enlargeableImages = [document.getElementById('previewImg'), document.getElementById('heightPreview')];
@@ -5820,9 +6501,9 @@ if (imageModal && modalImg) {
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
 
-    #region PNG2Cubes HTML
+#region PNG2Cubes HTML
     public static string PNG2Cubeshtml = @"<!DOCTYPE html>
 <html lang='en'>
 <head>
@@ -6073,9 +6754,9 @@ if (xhr.readyState === 4) {
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
 
-    #region UploadPage HTML
+#region UploadPage HTML
     public static string UploadPagehtml = @"<!DOCTYPE html>
 <html lang='en'>
 <head>
@@ -6103,9 +6784,9 @@ body {
   .btn { margin-top:14px; padding:10px 16px; border:none; border-radius:8px; font-weight:700; background:#27ae60; color:#fff; cursor:pointer; transition:background 0.2s, transform 0.15s; }
   .btn:hover { background:#2ecc71; transform:translateY(-1px); }
   .btn:active { transform:scale(0.98); }
-  #statusBox { margin-top:20px; font-size:14px; color:#aaa; }
-  #progress { width:100%; max-width:400px; height:12px; border-radius:8px; background:#222; overflow:hidden; margin:10px auto; display:none; }
-  #progressBar { height:100%; width:0%; background:#4ca1af; transition:width 0.3s; }
+#statusBox { margin-top:20px; font-size:14px; color:#aaa; }
+#progress { width:100%; max-width:400px; height:12px; border-radius:8px; background:#222; overflow:hidden; margin:10px auto; display:none; }
+#progressBar { height:100%; width:0%; background:#4ca1af; transition:width 0.3s; }
 .theme-toggle,
 .upload-btn {
   background: rgba(255,255,255,0.15);
@@ -6218,9 +6899,9 @@ form.addEventListener('submit', e => {
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
 
-    #region RestartPage HTML
+#region RestartPage HTML
     public static string RestartPagehtml = @"<!DOCTYPE html>
 <html lang=""en"">
 <head>
@@ -6252,9 +6933,9 @@ form.addEventListener('submit', e => {
 </body>
 </html>
 ";
-    #endregion
+#endregion
 
-    #region QuitPageHTML
+#region QuitPageHTML
 
     public static string QuitPagehtml = @"<!DOCTYPE html>
 <html lang='en'>
@@ -6325,9 +7006,9 @@ themeToggle.addEventListener('click', () => {
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
 
-    #region PasswordPage HTML
+#region PasswordPage HTML
     public static string PasswordPagehtml = @"<!DOCTYPE html>
 <html lang='en'>
 <head>
@@ -6428,9 +7109,9 @@ themeToggle.addEventListener('click', () => {
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
 
-    #region JobsPage HTML
+#region JobsPage HTML
 
     public static string JobsPagehtml = @"<!DOCTYPE html>
 <html lang='en'>
@@ -6639,9 +7320,9 @@ startPolling();
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
 
-    #region StopPasswordPage
+#region StopPasswordPage
     public static string StopPasswordPagehtml = @"<!DOCTYPE html>
 <html lang='en'>
 <head>
@@ -6750,5 +7431,185 @@ themeToggle.addEventListener('click', () => {
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
+
+#region BreakPrefab HTML
+    public static string BreakPrefabHtml = @"<!DOCTYPE html>
+<html lang='en'>
+<head>
+<meta charset='UTF-8'>
+<meta http-equiv='X-Frame-Options' content='SAMEORIGIN'>
+<meta http-equiv='X-Content-Type-Options' content='nosniff'>
+<meta http-equiv='Referrer-Policy' content='strict-origin-when-cross-origin'>
+<title>BreakPrefab</title>
+<link rel=""icon"" type=""image/png"" href=""/favicon.ico""/>
+<style>
+body {
+  font-family:'Segoe UI',Tahoma,sans-serif;
+  background:linear-gradient(135deg,#2c3e50,#4ca1af);
+  background-repeat:no-repeat;
+  background-attachment:fixed;
+  background-size:cover;
+  color:#f0f0f0;
+  margin:0;
+  min-height:100vh;
+}
+.container {
+  max-width:500px;
+  margin:60px auto;
+  background:rgba(0,0,0,0.75);
+  padding:25px;
+  border-radius:14px;
+  text-align:center;
+  animation:fadeIn 0.6s ease-out;
+  box-shadow:0 0 25px rgba(0,0,0,0.4);
+}
+h1 { margin-bottom:16px; }
+.instructions {
+  text-align:left;
+  font-size:13px;
+  color:#ccc;
+  background:rgba(255,255,255,0.05);
+  padding:12px;
+  border-radius:10px;
+  margin-bottom:20px;
+}
+input,button {
+  font-family:inherit;
+  border-radius:8px;
+  border:1px solid #444;
+  padding:10px;
+  margin:5px;
+  color:#f0f0f0;
+  background:#1e1e1e;
+}
+input[type='text'] {
+  text-align:center;
+  width:70%;
+  min-width:200px;
+}
+button {
+  background:#27ae60;
+  color:#fff;
+  font-weight:700;
+  padding:12px 24px;
+  border:none;
+  cursor:pointer;
+  transition:background 0.2s,transform 0.15s;
+}
+button:hover { background:#2ecc71; transform:translateY(-1px); }
+button:active { transform:scale(0.98); }
+button:disabled { background:#555; cursor:not-allowed; }
+#progress { width:100%; max-width:400px; height:12px; border-radius:8px; background:#222; overflow:hidden; margin:10px auto; display:none; }
+#progressBar { height:100%; width:0%; background:#4ca1af; transition:width 0.3s; }
+#statusBox { margin-top:10px; font-size:13px; color:#aaa; }
+.theme-toggle {
+  background:rgba(255,255,255,0.15);
+  border:none;
+  color:#fff;
+  padding:8px 14px;
+  border-radius:20px;
+  cursor:pointer;
+  font-size:13px;
+  transition:background 0.3s,transform 0.2s;
+  float:right;
+}
+.theme-toggle:hover {
+  background:rgba(255,255,255,0.25);
+  transform:translateY(-1px);
+}
+body.light {
+  background:linear-gradient(135deg,#f4f4f4,#fff);
+  color:#222;
+}
+body.light .container { background:rgba(255,255,255,0.9); color:#000; }
+body.light input { background:#fff; color:#000; border:1px solid #ccc; }
+body.light button { background:#3498db; }
+body.light button:hover { background:#2980b9; }
+body.light .theme-toggle { background:rgba(0,0,0,0.1); color:#000; }
+body.light .instructions { background:rgba(0,0,0,0.05); color:#333; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(10px);} to{opacity:1;transform:translateY(0);} }
+</style>
+</head>
+<body>
+<div class='container'>
+<button class='theme-toggle' id='themeToggle'>🌙 Dark Mode</button>
+<h1>📦 BreakPrefab</h1>
+<p class='instructions'>
+<strong>Instructions:</strong><br>
+1. Enter a <strong>prefabid</strong> (uint) or <strong>stringpath</strong>.<br>
+2. Click <strong>Break</strong> to process.<br>
+3. Download the resulting prefab file.
+</p>
+<form id='breakForm' method='post' action='/breakprefab'>
+<input type='text' id='prefabInput' name='prefab' placeholder='Enter prefabid (uint) or stringpath' required>
+<br>
+<button type='submit' id='breakButton'>Break</button>
+<div id='progress'><div id='progressBar'></div></div>
+<div id='statusBox'>Ready to break prefab.</div>
+</form>
+    <div style='margin-top:20px;'>
+      <a href='/' style='color:#4ca1af;text-decoration:none;font-weight:bold;'>← Back to Generator</a>
+    </div>
+<footer>© Copyright bmgjet</footer>
+</div>
+<script>
+const themeToggle=document.getElementById('themeToggle');
+const currentTheme=localStorage.getItem('theme')||'dark';
+document.body.classList.toggle('light',currentTheme==='light');
+updateToggleLabel();
+function updateToggleLabel(){ themeToggle.textContent=document.body.classList.contains('light')?'🌙 Dark Mode':'☀️ Light Mode'; }
+themeToggle.addEventListener('click',()=>{
+  document.body.classList.toggle('light');
+  localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark');
+  updateToggleLabel();
+});
+const form=document.getElementById('breakForm');
+form.addEventListener('submit',e=>{
+  e.preventDefault();
+  const input=document.getElementById('prefabInput');
+  const inputValue=input.value.trim();
+  if(!inputValue){alert('Please enter a prefabid or stringpath.');return;}
+  const xhr=new XMLHttpRequest();
+  const progress=document.getElementById('progress');
+  const bar=document.getElementById('progressBar');
+  const status=document.getElementById('statusBox');
+  progress.style.display='block';
+  status.textContent='Processing...';
+  xhr.upload.addEventListener('progress',ev=>{
+    if(ev.lengthComputable){
+      const pct=(ev.loaded/ev.total)*100;
+      bar.style.width=pct+'%';
+    }
+  });
+  xhr.onreadystatechange=()=>{
+    if (xhr.readyState === 4) {
+      if (xhr.status === 200) {
+        const responseText = xhr.responseText?.trim();
+        bar.style.width = '100%';
+        if (responseText) {
+          if (responseText.startsWith('data:')) {
+            status.innerHTML = `Break complete!<br><a href=""${responseText}"" download=""broken_prefab.map"" style=""display:inline-block;margin-top:10px;padding:5px 10px;background:#28a745;color:#fff;text-decoration:none;border-radius:3px;font-size:13px;"">💾 Download Result</a>`;
+          } else if (responseText.includes('Error')) {
+            status.innerHTML = `<span style=""color:#ff6b6b;"">${responseText}</span>`;
+          } else {
+            status.innerHTML = `Break complete!<br><span style=""font-size:13px;color:#9fd;"">Result: ${responseText}</span>`;
+          }
+        } else {
+          status.textContent = 'Break complete (no response text).';
+        }
+      } else { status.textContent = '❌ Break failed: ' + xhr.status; }
+    }
+  };
+  xhr.open('POST','/breakprefab');
+  const fd = new FormData();
+  fd.append('prefab', inputValue);
+  xhr.send(fd);
+});
+</script>
+</body>
+</html>";
+#endregion
+
+
 }

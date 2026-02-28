@@ -121,6 +121,10 @@
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\..\..\..\..\..\rust2026\RustDedicated_Data\Managed\Rust.Data.dll</HintPath>
     </Reference>
+    <Reference Include="Rust.FileSystem, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\..\..\..\..\..\hf5\RustDedicated_Data\Managed\Rust.FileSystem.dll</HintPath>
+    </Reference>
     <Reference Include="Rust.Global, Version=0.0.0.0, Culture=neutral, processorArchitecture=MSIL">
       <SpecificVersion>False</SpecificVersion>
       <HintPath>..\..\..\..\..\..\rust2026\RustDedicated_Data\Managed\Rust.Global.dll</HintPath>
