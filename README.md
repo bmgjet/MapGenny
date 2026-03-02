@@ -12,7 +12,7 @@ MapGenny is a server-side map generation system designed for the game Rust.
 It runs as a Harmony mod and provides a web-based interface for generating,
 processing, Rust map files and optional custom prefabs.
 
-[ScreenShot](https://raw.githubusercontent.com/bmgjet/MapGenny/refs/heads/main/screenshot.jpg)
+![Screenshot](https://raw.githubusercontent.com/bmgjet/MapGenny/refs/heads/main/screenshot.jpg)
 
 --------------------------------------------------
 Tested Platforms
@@ -49,10 +49,11 @@ Installation
 Place:
 MapGenny.dll
 
-Into:
-HarmonyMods/
+Into your servers:
+HarmonyMods
+folder
 
-It can be found in bin/Release
+MapGenny.dll can be found in bin/Release
 
 --------------------------------------------------
 Running the Server
@@ -147,9 +148,8 @@ cd "$(dirname "$0")"
 Custom Prefabs
 --------------------------------------------------
 Custom Prefab Template:
-https://mega.nz/file/vGAV1IID#NE-zj3Fw7fTko5YBx-EN3Rgq_EJHaHFlbmi_VW-wgLE
-
-The download includes its own instructions.
+Run the debug version of MapGenny.dll
+Then generate a map instead of loading custom prefabs it will dump the folder for all the templates thats on your current map would of used.
 
 --------------------------------------------------
 Jobs Zip Layout
