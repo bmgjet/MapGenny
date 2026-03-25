@@ -4350,25 +4350,58 @@ Library.DeleteCustomPrefabs = false;
 
             private static async Task HandleModels(HttpListenerContext ctx, string path)
             {
-                if (path.StartsWith("/Models/", StringComparison.OrdinalIgnoreCase))
+                if (!path.StartsWith("/Models/", StringComparison.OrdinalIgnoreCase)){return;}
+                string rawFileName = path.Substring("/Models/".Length);
+                if (rawFileName.Contains('?')) { rawFileName = rawFileName.Split('?')[0]; }
+                string fileName = Path.GetFileName(rawFileName);
+                string rootDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Models");
+                string fullPath = Path.Combine(rootDirectory, fileName);
+                string canonicalPath = Path.GetFullPath(fullPath);
+                if (!canonicalPath.StartsWith(rootDirectory, StringComparison.OrdinalIgnoreCase))
                 {
-                    string fileName = path.Substring("/Models/".Length);
-                    string fullPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Models", fileName);
-                    if (File.Exists(fullPath))
-                    {
-                        byte[] fileBytes = File.ReadAllBytes(fullPath);
-                        ctx.Response.ContentType = "model/gltf-binary";
-                        ctx.Response.ContentLength64 = fileBytes.Length;
-                        ctx.Response.StatusCode = 200;
-                        ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
-                        await ctx.Response.OutputStream.WriteAsync(fileBytes, 0, fileBytes.Length);
-                    }
-                    else
-                    {
-                        ctx.Response.StatusCode = 404;
-                    }
+                    ctx.Response.StatusCode = 403; 
+                    ctx.Response.Close();
+                    return;
                 }
-                ctx.Response.OutputStream.Close();
+
+                if (!File.Exists(canonicalPath))
+                {
+                    ctx.Response.StatusCode = 404;
+                    ctx.Response.Close();
+                    return;
+                }
+                string extension = Path.GetExtension(fileName).ToLowerInvariant();
+                string contentType = "";
+                 switch (extension)
+                {
+                    case ".glb":
+                        contentType = "model/gltf-binary"; break;
+                    case ".gltf":
+                        contentType = "model/gltf+json"; break;
+                    case ".json":
+                        contentType = "application/json"; break;
+                    case ".bin":
+                        contentType = "application/octet-stream"; break;
+                    default: contentType = "application/octet-stream"; break;
+                };
+
+                try
+                {
+                    byte[] fileBytes = File.ReadAllBytes(fullPath);
+                    ctx.Response.ContentType = contentType;
+                    ctx.Response.ContentLength64 = fileBytes.Length;
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
+                    ctx.Response.AddHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+                    ctx.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
+                    await ctx.Response.OutputStream.WriteAsync(fileBytes, 0, fileBytes.Length);
+                    ctx.Response.OutputStream.Close();
+                }
+                catch (Exception ex)
+                {
+                    ctx.Response.StatusCode = 500;
+                    ctx.Response.OutputStream.Close();
+                }
             }
 
             private static async Task Handle3DMAP(HttpListenerContext ctx, string path)
@@ -4390,33 +4423,11 @@ Library.DeleteCustomPrefabs = false;
                 List<Vector3[]> MapRoad = new List<Vector3[]>();
                 List<Vector3[]> MapRail = new List<Vector3[]>();
                 List<Vector3[]> MapRiver = new List<Vector3[]>();
-                float worldSize = ConVar.Server.worldsize;
-                float halfSize = worldSize / 2f;
-                if (TerrainMeta.Path?.Roads?.Count > 0)
-                {
-                    foreach (var r in TerrainMeta.Path.Roads)
-                    {
-                        if (r.Width > 5)
-                        {
-                            MapRoad.Add(r.Path.Points);
-                        }
-                    }
-                }
-                if (TerrainMeta.Path?.Rails?.Count > 0)
-                {
-                    foreach (var r in TerrainMeta.Path.Rails)
-                    {
-                        MapRail.Add(r.Path.Points);
-                    }
-                }
-                if (TerrainMeta.Path?.Rivers?.Count > 0)
-                {
-                    foreach (var r in TerrainMeta.Path.Rivers)
-                    {
-                        MapRiver.Add(r.Path.Points);
-                    }
-                }
                 List<MapP> Prefabs = new List<MapP>();
+                float worldSize = ConVar.Server.worldsize;
+                if (TerrainMeta.Path?.Roads?.Count > 0){foreach (var r in TerrainMeta.Path.Roads) {if (r.Width > 5){MapRoad.Add(r.Path.Points);}}}
+                if (TerrainMeta.Path?.Rails?.Count > 0){foreach (var r in TerrainMeta.Path.Rails) {MapRail.Add(r.Path.Points);}}
+                if (TerrainMeta.Path?.Rivers?.Count > 0){foreach (var r in TerrainMeta.Path.Rivers) {MapRiver.Add(r.Path.Points);}}
                 if (World.Serialization?.world?.prefabs?.Count > 0)
                 {
                     foreach (var pd in World.Serialization.world.prefabs)
@@ -4424,7 +4435,22 @@ Library.DeleteCustomPrefabs = false;
                         try
                         {
                             string name = StringPool.Get(pd.id);
-                            if (name.Contains("monument") || name.Contains("platform") || name.Contains("lava"))
+                            if(name.Contains("rock_formation_e") || name.Contains("rock_formation_a"))
+                            {
+                                Prefabs.Add(new MapP() { Name = "godrock", Postion = pd.position, Rotation = pd.rotation, Scale = pd.scale });
+                                continue;
+                            }
+                            else if (name.Contains("lava"))
+                            {
+                                Prefabs.Add(new MapP() { Name = "lava", Postion = pd.position, Rotation = pd.rotation, Scale = pd.scale });
+                                continue;
+                            }
+                            else if (name.Contains("monument_marker"))
+                            {
+                                Prefabs.Add(new MapP() { Name = pd.category, Postion = pd.position, Rotation = pd.rotation, Scale = pd.scale });
+                                continue;
+                            }
+                            else if (name.Contains("monument") || name.Contains("platform"))
                             {
                                 Vector3 postion = pd.position;
                                 if(postion.y < 500 && !name.Contains("lab")){postion.y = 500;}
@@ -6231,10 +6257,10 @@ display: flex;
 gap: 8px;
 }
 input.valid, select.valid, textarea.valid {
-  border: 2px solid #4CAF50 !important; /* green */
+  border: 2px solid #4CAF50 !important;
 }
 input.invalid, select.invalid, textarea.invalid {
-  border: 2px solid #f44336 !important; /* red */
+  border: 2px solid #f44336 !important;
 }
 #imageModal {
   position: fixed;
@@ -7619,9 +7645,9 @@ themeToggle.addEventListener('click', () => {
 </script>
 </body>
 </html>";
-    #endregion
+#endregion
 
-    #region BreakPrefab HTML
+#region BreakPrefab HTML
     public static string BreakPrefabHtml = @"<!DOCTYPE html>
 <html lang='en'>
 <head>
@@ -7798,17 +7824,29 @@ form.addEventListener('submit',e=>{
 </body>
 </html>";
 
+    #endregion
+    #region 3D Map HTML
     public static string MapViewer = @"
 <!DOCTYPE html>
 <html lang=""en"">
 <head>
     <meta charset=""UTF-8"">
-    <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+    <meta name=""viewport"" content=""width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"">
+    <meta name=""apple-mobile-web-app-capable"" content=""yes"">
+    <meta name=""apple-mobile-web-app-status-bar-style"" content=""black-translucent"">
     <title>3D Map</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { overflow: hidden; font-family: 'Segoe UI', Arial, sans-serif; background: #1a1a2e; }
-        #canvas-container { width: 100vw; height: 100vh; }
+        html, body { 
+            overflow: hidden; 
+            font-family: 'Segoe UI', Arial, sans-serif; 
+            background: #1a1a2e; 
+            touch-action: none;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+        #canvas-container { width: 100vw; height: 100vh; height: 100dvh; }
         #loading {
             position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
@@ -7824,7 +7862,7 @@ form.addEventListener('submit',e=>{
         @keyframes spin { to { transform: rotate(360deg); } }
         #loading-text { color: #00d9ff; margin-top: 20px; font-size: 18px; letter-spacing: 2px; }
         #debug-info {
-            position: fixed; top: 20px; left: 20px; background: rgba(0,0,0,0.85);
+            position: fixed; top: 1px; left: 1px; background: rgba(0,0,0,0.85);
             padding: 15px; border-radius: 10px; color: #00ff00; font-size: 12px;
             font-family: monospace; max-width: 500px; max-height: 300px; overflow-y: auto; z-index: 1001;
         }
@@ -7832,7 +7870,7 @@ form.addEventListener('submit',e=>{
         #debug-info .success { color: #44ff44; }
         #debug-info .info { color: #ffff00; }
         #controls {
-            position: fixed; bottom: 20px; left: 20px; background: rgba(0,0,0,0.7);
+            position: fixed; bottom: 1px; left: 1px; background: rgba(0,0,0,0.7);
             padding: 15px 20px; border-radius: 10px; color: #fff; font-size: 13px;
             backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
         }
@@ -7840,37 +7878,104 @@ form.addEventListener('submit',e=>{
         #controls p { margin: 5px 0; opacity: 0.8; }
         #controls span { color: #00d9ff; font-weight: bold; }
         #info {
-            position: fixed; top: 20px; right: 20px; background: rgba(0,0,0,0.7);
+            position: fixed; top: 1px; right: 1px; background: rgba(0,0,0,0.7);
             padding: 15px 20px; border-radius: 10px; color: #fff; font-size: 13px;
             backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
         }
         #info .coord { color: #00d9ff; font-family: monospace; }
         #layer-toggle {
-            position: fixed; top: 20px; left: 50%; transform: translateX(-50%);
+            position: fixed; top: 1px; left: 50%; transform: translateX(-50%);
             background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px;
             backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
             display: flex; gap: 15px; z-index: 1001;
         }
         #layer-toggle label { color: #fff; cursor: pointer; display: flex; align-items: center; gap: 5px; }
         #layer-toggle input[type=""checkbox""] { accent-color: #00d9ff; }
-        #legend {
-            position: fixed; bottom: 20px; right: 20px; background: rgba(0,0,0,0.7);
-            padding: 15px 20px; border-radius: 10px; color: #fff; font-size: 12px;
-            backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
-            max-height: 300px; overflow-y: auto;
+        #joystick-container {
+            position: fixed;
+            bottom: 30px;
+            left: 30px;
+            width: 120px;
+            height: 120px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 50%;
+            border: 3px solid rgba(0, 217, 255, 0.5);
+            touch-action: none;
+            z-index: 1002;
+            display: none;
         }
-        #legend h3 { color: #00d9ff; margin-bottom: 10px; font-size: 14px; }
-        #legend p { margin: 3px 0; }
-        #legend .swatch { display: inline-block; width: 12px; height: 12px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
-        #crosshair {
-            position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-            width: 20px; height: 20px; pointer-events: none; z-index: 100;
+        #joystick-knob {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            background: rgba(0, 217, 255, 0.8);
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 15px rgba(0, 217, 255, 0.5);
         }
-        #crosshair::before, #crosshair::after {
-            content: ''; position: absolute; background: rgba(255,255,255,0.7);
+        #joystick-knob::after {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
         }
-        #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
-        #crosshair::after { width: 100%; height: 2px; top: 50%; transform: translateY(-50%); }
+        #look-area {
+            position: fixed;
+            top: 0;
+            right: 0;
+            width: 50%;
+            height: 100%;
+            touch-action: none;
+            z-index: 1001;
+            display: none;
+        }
+        #speed-btn {
+            position: fixed;
+            bottom: 160px;
+            left: 30px;
+            width: 60px;
+            height: 60px;
+            background: rgba(0, 0, 0, 0.5);
+            border: 3px solid rgba(0, 217, 255, 0.5);
+            border-radius: 50%;
+            color: #00d9ff;
+            font-size: 11px;
+            font-weight: bold;
+            cursor: pointer;
+            z-index: 1002;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            touch-action: none;
+        }
+        #speed-btn.active {
+            background: rgba(0, 217, 255, 0.5);
+            border-color: #00d9ff;
+        }
+        @media (hover: hover) and (pointer: fine) {
+            #controls { display: block; }
+        }
+        @media (hover: none), (pointer: coarse) {
+            #controls { display: none !important; }
+            #joystick-container { display: block; }
+            #look-area { display: block; }
+            #speed-btn { display: flex; }
+            #layer-toggle {
+                flex-wrap: wrap;
+                justify-content: center;
+                max-width: 90%;
+                padding: 8px 15px;
+            }
+            #layer-toggle label { font-size: 11px; }
+            #info { font-size: 11px; padding: 10px 15px; }
+        }
     </style>
 </head>
 <body>
@@ -7880,7 +7985,10 @@ form.addEventListener('submit',e=>{
     </div>
     <div id=""debug-info""></div>
     <div id=""canvas-container""></div>
-    <div id=""crosshair""></div>
+    <!-- Mobile Controls -->
+    <div id=""joystick-container""><div id=""joystick-knob""></div></div>
+    <div id=""look-area""></div>
+    <button id=""speed-btn"">FAST</button>
     <div id=""layer-toggle"">
         <label><input type=""checkbox"" id=""showDebug"" > Debug</label>
         <label><input type=""checkbox"" id=""showRoads"" checked> Roads</label>
@@ -7893,7 +8001,6 @@ form.addEventListener('submit',e=>{
         <p><span>W/A/S/D</span> - Move Forward/Left/Back/Right</p>
         <p><span>Mouse</span> - Look Around</p>
         <p><span>Shift</span> - Move Fast</p>
-        <p><span>Click</span> - Enable Pointer Lock</p>
         <p><span>ESC</span> - Release Pointer Lock</p>
     </div>
     <div id=""info"">
@@ -7906,6 +8013,7 @@ form.addEventListener('submit',e=>{
         let scene, camera, renderer, terrain;
         let gltfLoader = null;
         const loadedGLBModels = {};
+        const prefabOffsetCache = {};
         let roadLines = [];
         let riverLines = [];
         let railLines = [];
@@ -7926,8 +8034,18 @@ form.addEventListener('submit',e=>{
         let showPrefabs = true;
         let showWater = true;
         let waterMesh = null;
-        let WATER_LEVEL_NORMALIZED = 0.0;
         const CHECKBOX_STATE_KEY = 'mapViewer.layerStates';
+        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+        let mobileSpeedMultiplier = 1;
+        let joystickActive = false;
+        let joystickTouchId = null;
+        let joystickStartX = 0;
+        let joystickStartY = 0;
+        let joystickDeltaX = 0;
+        let joystickDeltaY = 0;
+        let lookTouchId = null;
+        let lastLookX = 0;
+        let lastLookY = 0;
         showRoads   = applyCheckboxState('showRoads', true);
         showRails   = applyCheckboxState('showRails', true);
         showPrefabs = applyCheckboxState('showPrefabs', true);
@@ -7940,7 +8058,155 @@ form.addEventListener('submit',e=>{
             if (waterMesh) waterMesh.visible = showWater;
             riverLines.forEach(line => line.visible = showWater);
         }, 1000);
-
+        function setupMobileControls() {
+            if (!isMobile) return;
+            function requestFullscreen() {
+                const elem = document.documentElement;
+                if (elem.requestFullscreen) {
+                    elem.requestFullscreen().catch(() => {});
+                } else if (elem.webkitRequestFullscreen) {
+                    elem.webkitRequestFullscreen();
+                } else if (elem.msRequestFullscreen) {
+                    elem.msRequestFullscreen();
+                }
+            }
+            let fullscreenRequested = false;
+            function tryFullscreen() {
+                if (!fullscreenRequested) {
+                    fullscreenRequested = true;
+                    requestFullscreen();
+                }
+            }
+            document.addEventListener('touchstart', tryFullscreen, { once: true, passive: true });
+            const joystickContainer = document.getElementById('joystick-container');
+            const joystickKnob = document.getElementById('joystick-knob');
+            const lookArea = document.getElementById('look-area');
+            const speedBtn = document.getElementById('speed-btn');
+            joystickContainer.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                if (joystickTouchId !== null) return;
+                const touch = e.changedTouches[0];
+                joystickTouchId = touch.identifier;
+                const rect = joystickContainer.getBoundingClientRect();
+                joystickStartX = rect.left + rect.width / 2;
+                joystickStartY = rect.top + rect.height / 2;
+                joystickActive = true;
+            }, { passive: false });
+            joystickContainer.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (const touch of e.changedTouches) {
+                    if (touch.identifier === joystickTouchId) {
+                        const dx = touch.clientX - joystickStartX;
+                        const dy = touch.clientY - joystickStartY;
+                        const maxDist = 40;
+                        const dist = Math.sqrt(dx * dx + dy * dy);
+                        const clampedDist = Math.min(dist, maxDist);
+                        const angle = Math.atan2(dy, dx);
+                        const clampedX = Math.cos(angle) * clampedDist;
+                        const clampedY = Math.sin(angle) * clampedDist;
+                        joystickKnob.style.transform = `translate(calc(-50% + ${clampedX}px), calc(-50% + ${clampedY}px))`;
+                        joystickDeltaX = clampedX / maxDist;
+                        joystickDeltaY = clampedY / maxDist;
+                    }
+                }
+            }, { passive: false });
+            joystickContainer.addEventListener('touchend', (e) => {
+                for (const touch of e.changedTouches) {
+                    if (touch.identifier === joystickTouchId) {
+                        joystickTouchId = null;
+                        joystickActive = false;
+                        joystickKnob.style.transform = 'translate(-50%, -50%)';
+                        joystickDeltaX = 0;
+                        joystickDeltaY = 0;
+                    }
+                }
+            });
+            joystickContainer.addEventListener('touchcancel', (e) => {
+                joystickTouchId = null;
+                joystickActive = false;
+                joystickKnob.style.transform = 'translate(-50%, -50%)';
+                joystickDeltaX = 0;
+                joystickDeltaY = 0;
+            });
+            lookArea.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                if (lookTouchId !== null) return;
+                const touch = e.changedTouches[0];
+                lookTouchId = touch.identifier;
+                lastLookX = touch.clientX;
+                lastLookY = touch.clientY;
+            }, { passive: false });
+            lookArea.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                for (const touch of e.changedTouches) {
+                    if (touch.identifier === lookTouchId) {
+                        const dx = touch.clientX - lastLookX;
+                        const dy = touch.clientY - lastLookY;
+                        lastLookX = touch.clientX;
+                        lastLookY = touch.clientY;
+                        euler.setFromQuaternion(camera.quaternion);
+                        euler.y -= dx * lookSpeed * 2;
+                        euler.x -= dy * lookSpeed * 2;
+                        euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+                        camera.quaternion.setFromEuler(euler);
+                    }
+                }
+            }, { passive: false });
+            lookArea.addEventListener('touchend', (e) => {
+                for (const touch of e.changedTouches) {
+                    if (touch.identifier === lookTouchId) {
+                        lookTouchId = null;
+                    }
+                }
+            });
+            lookArea.addEventListener('touchcancel', (e) => {lookTouchId = null;});
+            speedBtn.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                mobileSpeedMultiplier = mobileSpeedMultiplier === 1 ? 6 : 1;
+                speedBtn.classList.toggle('active', mobileSpeedMultiplier > 1);
+            }, { passive: false });
+            speedBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                mobileSpeedMultiplier = mobileSpeedMultiplier === 1 ? 6 : 1;
+                speedBtn.classList.toggle('active', mobileSpeedMultiplier > 1);
+            });
+            document.getElementById('canvas-container').addEventListener('touchstart', (e) => {
+                if (e.target.id === 'canvas-container' && lookTouchId === null) {
+                    const touch = e.changedTouches[0];
+                    const rect = joystickContainer.getBoundingClientRect();
+                    const isInJoystick = touch.clientX < rect.right + 20 && touch.clientY > rect.top - 20;
+                    if (!isInJoystick) {
+                        lookTouchId = touch.identifier;
+                        lastLookX = touch.clientX;
+                        lastLookY = touch.clientY;
+                    }
+                }
+            }, { passive: false });
+            document.getElementById('canvas-container').addEventListener('touchmove', (e) => {
+                for (const touch of e.changedTouches) {
+                    if (touch.identifier === lookTouchId) {
+                        const dx = touch.clientX - lastLookX;
+                        const dy = touch.clientY - lastLookY;
+                        lastLookX = touch.clientX;
+                        lastLookY = touch.clientY;
+                        euler.setFromQuaternion(camera.quaternion);
+                        euler.y -= dx * lookSpeed * 2;
+                        euler.x -= dy * lookSpeed * 2;
+                        euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+                        camera.quaternion.setFromEuler(euler);
+                    }
+                }
+            }, { passive: false });
+            document.getElementById('canvas-container').addEventListener('touchend', (e) => {
+                for (const touch of e.changedTouches) {
+                    if (touch.identifier === lookTouchId) {
+                        lookTouchId = null;
+                    }
+                }
+            });
+        }
 function onLayerChange(id, callback) {
     document.getElementById(id).addEventListener('change', (e) => {
         const state = loadLayerState();
@@ -7949,44 +8215,30 @@ function onLayerChange(id, callback) {
         callback(e.target.checked);
     });
 }
-
 onLayerChange('showRoads', (v) => {
     showRoads = v;
     roadLines.forEach(l => l.visible = v);
 });
-
 onLayerChange('showRails', (v) => {
     showRails = v;
     railLines.forEach(l => l.visible = v);
 });
-
 onLayerChange('showPrefabs', (v) => {
     showPrefabs = v;
     prefabMarkers.forEach(m => m.visible = v);
 });
-
 onLayerChange('showWater', (v) => {
     showWater = v;
     if (waterMesh) waterMesh.visible = v;
     riverLines.forEach(l => l.visible = v);
 });
-
-onLayerChange('showDebug', (v) => {
-    showDebug = v;
-});
-
+onLayerChange('showDebug', (v) => {showDebug = v;});
 function loadLayerState() {
     try {
         return JSON.parse(localStorage.getItem(CHECKBOX_STATE_KEY)) || {};
-    } catch {
-        return {};
-    }
+    } catch {return {};}
 }
-
-function saveLayerState(state) {
-    localStorage.setItem(CHECKBOX_STATE_KEY, JSON.stringify(state));
-}
-
+function saveLayerState(state) {localStorage.setItem(CHECKBOX_STATE_KEY, JSON.stringify(state));}
 function applyCheckboxState(id, defaultValue) {
     const saved = loadLayerState();
     const checkbox = document.getElementById(id);
@@ -7994,7 +8246,6 @@ function applyCheckboxState(id, defaultValue) {
     checkbox.checked = value;
     return value;
 }
-
         function log(message, type = 'success') {
             if(showDebug)
             {
@@ -8005,7 +8256,6 @@ function applyCheckboxState(id, defaultValue) {
             debugEl.scrollTop = debugEl.scrollHeight;
             }
         }
-
         function base64ToInt16Array(base64) {
             try {
                 const binaryString = atob(base64);
@@ -8020,7 +8270,6 @@ function applyCheckboxState(id, defaultValue) {
                 return null;
             }
         }
-
         function base64ToUint8Array(base64) {
             try {
                 const binaryString = atob(base64);
@@ -8035,25 +8284,18 @@ function applyCheckboxState(id, defaultValue) {
                 return null;
             }
         }
-
         async function decompressGzipBase64(base64) {
             try {
                 const binaryString = atob(base64);
                 const len = binaryString.length;
                 const bytes = new Uint8Array(len);
-                for (let i = 0; i < len; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
+                for (let i = 0; i < len; i++) {bytes[i] = binaryString.charCodeAt(i);}
                 const ds = new DecompressionStream('gzip');
                 const decompressedStream = new Response(bytes).body.pipeThrough(ds);
                 const resultBuffer = await new Response(decompressedStream).arrayBuffer();
                 return resultBuffer;
-            } catch (e) {
-                log(`GZIP decompression error: ${e.message}`, 'error');
-                return null;
-            }
+            } catch (e) {return null;}
         }
-
         async function decompressHeightmap(base64) {
             const buffer = await decompressGzipBase64(base64);
             if (!buffer) return null;
@@ -8064,21 +8306,18 @@ function applyCheckboxState(id, defaultValue) {
             if (!buffer) return null;
             return new Uint8Array(buffer);
         }
-
 function downsampleHeightmap(data, srcRes, dstRes) {
     const result = new Float32Array(dstRes * dstRes);
     const ratio = (srcRes - 1) / (dstRes - 1);
     const WATER_LEVEL_SHORT = 16336;
     const MAX_DEVIATION_SHORT = 16336;
     const MAX_DEVIATION_METERS = 500;
-
     let minH = Infinity, maxH = -Infinity;
     for (let i = 0; i < data.length; i++) {
         const h = data[i];
         if (h < minH) minH = h;
         if (h > maxH) maxH = h;
     }
-
     for (let y = 0; y < dstRes; y++) {
         for (let x = 0; x < dstRes; x++) {
             const srcX = x * ratio;
@@ -8098,18 +8337,16 @@ function downsampleHeightmap(data, srcRes, dstRes) {
                 fx * (1 - fy) * h10 +
                 (1 - fx) * fy * h01 +
                 fx * fy * h11;
-
             result[y * dstRes + x] = (rawHeight - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
         }
     }
     log(`Heights converted to world units`);
     return result;
 }
-
         async function init() {
             scene = new THREE.Scene();
             scene.background = new THREE.Color(0x87CEEB);
-            scene.fog = new THREE.Fog(0x87CEEB, 500, 2000);
+            scene.fog = new THREE.Fog(0x87CEEB, 1000, 4000);
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 9999);
             camera.position.set(0, 300, 0);
             camera.lookAt(0, 0, -1);
@@ -8122,53 +8359,26 @@ function downsampleHeightmap(data, srcRes, dstRes) {
             const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
             directionalLight.position.set(100, 200, 100);
             scene.add(directionalLight);
-            document.getElementById('showRoads').addEventListener('change', (e) => {
-                showRoads = e.target.checked;
-                roadLines.forEach(line => line.visible = showRoads);
-            });
-            document.getElementById('showRails').addEventListener('change', (e) => {
-                showRails = e.target.checked;
-                railLines.forEach(line => line.visible = showRails);
-            });
-            document.getElementById('showPrefabs').addEventListener('change', (e) => {
-                showPrefabs = e.target.checked;
-                prefabMarkers.forEach(marker => marker.visible = showPrefabs);
-            });
-            document.getElementById('showWater').addEventListener('change', (e) => {
-                showWater = e.target.checked;
-                if (waterMesh) waterMesh.visible = showWater;
-                riverLines.forEach(line => line.visible = showWater);
-            });
-            document.getElementById('showDebug').addEventListener('change', (e) => {
-                showDebug = e.target.checked;
-            });
-
             await loadTerrain();
-            const fogNear = TERRAIN_SIZE * 0.1;
-            const fogFar = TERRAIN_SIZE * 0.4;
+            const fogNear = TERRAIN_SIZE * 0.2;
+            const fogFar = TERRAIN_SIZE * 0.6;
             scene.fog = new THREE.Fog(0x87CEEB, fogNear, fogFar);
             camera.position.y = Math.max(300, TERRAIN_SIZE * 0.15);
             setupControls();
-            setTimeout(() => {
-                document.getElementById('loading').classList.add('hidden');
-            }, 1000);
+            setupMobileControls();
+            setTimeout(() => {document.getElementById('loading').classList.add('hidden');}, 1000);
             animate();
         }
-
         async function loadTerrain() {
             try {
-                log('Fetching terrain data from /3dmap/data...', 'info');
                 const response = await fetch('/3dmap/data');
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
+                if (!response.ok) {throw new Error(`HTTP ${response.status}: ${response.statusText}`);}
                 const terrainData = await response.json();
                 log(`Received: worldSize=${terrainData.worldSize}, heightMapRes=${terrainData.heightMapResolution}`, 'info');
                 TERRAIN_SIZE = terrainData.worldSize || 1000;
                 SEGMENTS = terrainData.heightMapResolution || 512;
                 if(SEGMENTS < 512) SEGMENTS = 512;
                 HEIGHT_SCALE = 1.0;
-                log('Decompressing heightmap (GZIP Int16)...', 'info');
                 let rawHeights = await decompressHeightmap(terrainData.heightmap);
                 if (!rawHeights) {
                 rawHeights = base64ToInt16Array(terrainData.heightmap);
@@ -8179,24 +8389,19 @@ function downsampleHeightmap(data, srcRes, dstRes) {
                 }
                 if (!rawHeights) throw new Error('Failed to decode heightmap');
                 log(`Decoded ${rawHeights.length} Int16 height values`);
-                log('Decompressing splatmap (GZIP Uint8)...', 'info');
                 let splatData = await decompressData(terrainData.splatmap);
-                if (!splatData) {
-                    splatData = base64ToUint8Array(terrainData.splatmap);
-                }
+                if (!splatData) {splatData = base64ToUint8Array(terrainData.splatmap);}
                 if (splatData) log(`Decoded ${splatData.length} splat values`);
                 const splatRes = terrainData.splatMapResolution || terrainData.heightMapResolution;
-                log(`Splat: ${splatRes}x${splatRes}`, 'info');
+                log(`Splat: ${splatRes}x${splatRes}`);
                 let minH = Infinity, maxH = -Infinity;
                 for (let i = 0; i < rawHeights.length; i++) {
                     if (rawHeights[i] < minH) minH = rawHeights[i];
                     if (rawHeights[i] > maxH) maxH = rawHeights[i];
                 }
-                log(`Height range: ${minH} to ${maxH}`);
                 const srcRes = terrainData.heightMapResolution;
                 const dstRes = SEGMENTS + 1;
                 let heights;
-
                 if (srcRes !== dstRes) {heights = downsampleHeightmap(rawHeights, srcRes, dstRes);
                 } else {
                     const WATER_LEVEL_SHORT = 16336;
@@ -8205,11 +8410,8 @@ function downsampleHeightmap(data, srcRes, dstRes) {
                     const minWorldH = (minH - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
                     const maxWorldH = (maxH - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
                     log(`Converting ${rawHeights.length} heights directly to world units`, 'info');
-                    log(`World height range: ${minWorldH.toFixed(2)} → ${maxWorldH.toFixed(2)}m (0 = water level)`, 'info');
                     heights = new Float32Array(rawHeights.length);
-                    for (let i = 0; i < rawHeights.length; i++) {
-                        heights[i] = (rawHeights[i] - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
-                    }
+                    for (let i = 0; i < rawHeights.length; i++) {heights[i] = (rawHeights[i] - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;}
                 }
                 window.terrainHeights = heights;
                 window.terrainResolution = dstRes;
@@ -8218,27 +8420,22 @@ function downsampleHeightmap(data, srcRes, dstRes) {
                 window.terrainLoaded = true;
                 createTerrainMesh(heights, terrainData.splatColors);
                 createWaterMesh();
-
                 if (terrainData.roads && terrainData.roads.length > 0) {
                     log(`Drawing ${terrainData.roads.length} roads from server data...`);
                     drawRoadsFromServer(terrainData.roads);
-                } 
-
+                }
                 if (terrainData.rail && terrainData.rail.length > 0) {
                     log(`Drawing ${terrainData.rail.length} rails from server data...`);
                     drawRailsFromServer(terrainData.rail);
                 }
-
                 if (terrainData.prefabs && terrainData.prefabs.length > 0) {
                     log(`Drawing ${terrainData.prefabs.length} prefabs from server data...`);
                     drawPrefabs(terrainData.prefabs);
                 }
-
                 if (terrainData.river && terrainData.river.length > 0) {
                     log(`Drawing ${terrainData.river.length} river from server data...`);
                     drawRiverFromServer(terrainData.river);
-                } 
-
+                }
             } catch (error) {
                 log(`Failed to load terrain: ${error.message}`, 'error');
                 log('Creating demo terrain...', 'info');
@@ -8246,9 +8443,7 @@ function downsampleHeightmap(data, srcRes, dstRes) {
                 createDemoTerrain();
             }
         }
-
 function createTerrainMesh(heights, splatColors) {
-    log('Creating terrain mesh');
     const colorMap = {
         dirt:    splatColors?.dirt    || [0.6, 0.479, 0.33],
         snow:    splatColors?.snow    || [0.862, 0.929, 0.941],
@@ -8259,25 +8454,22 @@ function createTerrainMesh(heights, splatColors) {
         stones:  splatColors?.stones  || [0.137, 0.278, 0.276],
         gravel:  splatColors?.gravel || [0.25, 0.243, 0.22]
     };
-
     const channelColors = [
-        colorMap.dirt, 
-        colorMap.snow,  
-        colorMap.sand, 
-        colorMap.rock,   
-        colorMap.grass,   
-        colorMap.forest,   
-        colorMap.stones,   
-        colorMap.gravel    
+        colorMap.dirt,
+        colorMap.snow,
+        colorMap.sand,
+        colorMap.rock,
+        colorMap.grass,
+        colorMap.forest,
+        colorMap.stones,
+        colorMap.gravel
     ];
-
     function getSplatChannel(x, y, channel, splatRes) {
         if (!window.splatData) return 0;
         const channelOffset = channel * splatRes * splatRes;
         const index = channelOffset + y * splatRes + x;
         return index < window.splatData.length ? window.splatData[index] : 0;
     }
-
     const geometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, SEGMENTS, SEGMENTS);
     const vertices = geometry.attributes.position.array;
     const colors = new Float32Array(vertices.length);
@@ -8297,7 +8489,6 @@ function createTerrainMesh(heights, splatColors) {
                 weights.push(getSplatChannel(sx, sy, c, splatRes) / 255.0);
                 totalWeight += weights[c];
             }
-
             if (totalWeight > 0) {
                 r = g = b = 0;
                 for (let c = 0; c < 8; c++) {
@@ -8323,9 +8514,8 @@ function createTerrainMesh(heights, splatColors) {
     scene.add(terrain);
     log('Terrain mesh created', 'success');
 }
-
 function createWaterMesh() {
-    const waterHeight = 0;
+    const waterHeight = 0.01;
     const waterGeo = new THREE.PlaneGeometry(
         TERRAIN_SIZE,
         TERRAIN_SIZE,
@@ -8337,7 +8527,7 @@ function createWaterMesh() {
         transparent: true,
         opacity: 0.75,
         shininess: 100,
-        depthWrite: false
+        depthWrite: true
     });
     waterMesh = new THREE.Mesh(waterGeo, waterMat);
     waterMesh.rotation.x = -Math.PI / 2;
@@ -8345,31 +8535,24 @@ function createWaterMesh() {
     waterMesh.renderOrder = 1;
     terrain.renderOrder = 0;
     scene.add(waterMesh);
-    log(`Water mesh created at height ${waterHeight.toFixed(2)}`, 'success');
 }
         function getTerrainHeightAt(worldX, worldZ) {
             if (!window.terrainHeights || !window.terrainResolution) return 0;
             const res = window.terrainResolution;
-            const nx = (worldX / TERRAIN_SIZE + 0.5) * (res - 1);
-            const ny = (1.0 - (worldZ / TERRAIN_SIZE) + 0.5) * (res - 1);
-            if (nx < 0 || nx > res - 1 || ny < 0 || ny > res - 1) return 0;
-            const x0 = Math.floor(nx), y0 = Math.floor(ny);
-            const x1 = Math.min(x0 + 1, res - 1), y1 = Math.min(y0 + 1, res - 1);
-            const fx = nx - x0, fy = ny - y0;
-            const h00 = window.terrainHeights[y0 * res + x0] || 0;
-            const h10 = window.terrainHeights[y0 * res + x1] || 0;
-            const h01 = window.terrainHeights[y1 * res + x0] || 0;
-            const h11 = window.terrainHeights[y1 * res + x1] || 0;
-            const height = (1-fx)*(1-fy)*h00 + fx*(1-fy)*h10 + (1-fx)*fy*h01 + fx*fy*h11;
-            return height;
+            const halfSize = TERRAIN_SIZE / 2;
+            const percentX = (worldX + halfSize) / TERRAIN_SIZE;
+            const percentZ = (worldZ + halfSize) / TERRAIN_SIZE;
+            const gridX = Math.floor(percentX * (res - 1));
+            const gridZ = Math.floor(percentZ * (res - 1));
+            const flippedGridZ = (res - 1) - gridZ;
+            if (gridX < 0 || gridX >= res || flippedGridZ < 0 || flippedGridZ >= res) {return 0;}
+            return window.terrainHeights[flippedGridZ * res + gridX] || 0;
         }
-const ROAD_HEIGHT_OFFSET = 0.5; 
+const ROAD_HEIGHT_OFFSET = 0.5;
 const RAIL_HEIGHT_OFFSET = 0.8;
-
 function drawRoadsFromServer(roadsData) {
-    const ROAD_WIDTH = 6; 
+    const ROAD_WIDTH = 8;
     const ROAD_COLOR = 0x111111;
-
     roadsData.forEach((roadPath) => {
         if (!roadPath || roadPath.length < 2) return;
         for (let i = 0; i < roadPath.length - 1; i++) {
@@ -8387,12 +8570,10 @@ function drawRoadsFromServer(roadsData) {
         }
     });
 }
-
 function drawRiverFromServer(riverData) {
     log(`Drawing ${riverData.length} River...`);
-    const RIVER_WIDTH = 6; 
+    const RIVER_WIDTH = 8;
     const RIVER_COLOR = 0x87CEEB;
-
     riverData.forEach((riverPath) => {
         if (!riverPath || riverPath.length < 2) return;
         for (let i = 0; i < riverPath.length - 1; i++) {
@@ -8410,14 +8591,11 @@ function drawRiverFromServer(riverData) {
         }
     });
 }
-
 function drawRailsFromServer(railsData) {
-    const TRACK_WIDTH = 3; 
+    const TRACK_WIDTH = 3;
     const TRACK_COLOR = 0x3d2b1f;
-
     railsData.forEach((railPath) => {
-        if (!railPath || railPath.length < 2) return;
-
+        if (!railPath || railPath.length < 2) {return;}
         for (let i = 0; i < railPath.length - 1; i++) {
             const p1 = railPath[i];
             const p2 = railPath[i+1];
@@ -8433,22 +8611,6 @@ function drawRailsFromServer(railsData) {
         }
     });
 }
-
-function getTerrainHeightAt(worldX, worldZ) {
-    if (!window.terrainHeights || !window.terrainResolution) return 0;
-    const res = window.terrainResolution;
-    const halfSize = TERRAIN_SIZE / 2;
-    const percentX = (worldX + halfSize) / TERRAIN_SIZE;
-    const percentZ = (worldZ + halfSize) / TERRAIN_SIZE;
-    const gridX = Math.floor(percentX * (res - 1));
-    const gridZ = Math.floor(percentZ * (res - 1));
-    const flippedGridZ = (res - 1) - gridZ;
-    if (gridX < 0 || gridX >= res || flippedGridZ < 0 || flippedGridZ >= res) {
-        return 0;
-    }
-    return window.terrainHeights[flippedGridZ * res + gridX] || 0;
-}
-
 function createThickSegment(v1, v2, width, color, arrayToPush) {
     const distance = v1.distanceTo(v2);
     const geometry = new THREE.BoxGeometry(width, 0.5, distance);
@@ -8459,89 +8621,177 @@ function createThickSegment(v1, v2, width, color, arrayToPush) {
     scene.add(mesh);
     arrayToPush.push(mesh);
 }
-
-function initGLTFLoader() {
-    if (typeof THREE.GLTFLoader !== 'undefined') {
-        gltfLoader = new THREE.GLTFLoader();
-        log('GLTFLoader initialized', 'info');
-    } else {
-        log('GLTFLoader not available, will use cube markers', 'error');
-    }
-}
-
-function checkModelExists(url, callback) {
-    const img = new Image();
-    img.onload = () => callback(true);
-    img.onerror = () => callback(false);
-    img.src = url;
-}
-
+function initGLTFLoader() {if (typeof THREE.GLTFLoader !== 'undefined') {gltfLoader = new THREE.GLTFLoader();} else {log('GLTFLoader not available, will use cube markers', 'error');}}
 function loadGLBModel(url, onLoad, onError) {
     if (!gltfLoader) {
-        if (onError) onError('GLTFLoader not initialized');
-        return;
+    if (onError) onError('GLTFLoader not initialized');
+    return;
     }
     gltfLoader.load(
         url,
-        (gltf) => {
-            if (onLoad) onLoad(gltf);
-        },
-        (progress) => {
-            // Progress callback
-        },
-        (error) => {
-            log(`Failed to load GLB: ${url}`, 'info');
-            if (onError) onError(error);
-        }
+        (gltf) => {if (onLoad) onLoad(gltf);},
+        (progress) => {},
+        (error) => {if (onError) onError(error);}
     );
 }
-
-function processPrefab(prefab, index) {
+async function loadPrefabOffset(prefabName) {
+    if (prefabOffsetCache[prefabName] !== undefined) {
+        log(`Using cached offset for: ${prefabName}`, 'info');
+        return prefabOffsetCache[prefabName];
+    }
+    const offsetUrl = window.location.origin + '/Models/' + prefabName + '.json';
+    let rawOffsetData = null;
+        try {
+            const response = await fetch(offsetUrl);
+            if (response.ok) {rawOffsetData = await response.json();}
+        } catch (e) {log(`Error fetching ${offsetUrl}: ${e.message}`, 'info');}
+    const normalizeOffsets = (data) => {
+        if (!data) return null;
+        return {
+            positionOffset: {
+                x: data.positionOffset?.x ?? data.localPositionOffset?.x ?? 0,
+                y: data.positionOffset?.y ?? data.localPositionOffset?.y ?? 0,
+                z: data.positionOffset?.z ?? data.localPositionOffset?.z ?? 0
+            },
+            rotationOffset: {
+                x: data.rotationOffset?.x ?? data.localRotationOffset?.x ?? 0,
+                y: data.rotationOffset?.y ?? data.localRotationOffset?.y ?? 0,
+                z: data.rotationOffset?.z ?? data.localRotationOffset?.z ?? 0
+            },
+            scaleMultiplier: {
+                x: data.scaleMultiplier?.x ?? data.localScaleOffset?.x ?? 1,
+                y: data.scaleMultiplier?.y ?? data.localScaleOffset?.y ?? 1,
+                z: data.scaleMultiplier?.z ?? data.localScaleOffset?.z ?? 1
+            }
+        };
+    };
+    if (rawOffsetData) {
+        const normalizedOffsets = normalizeOffsets(rawOffsetData);
+        prefabOffsetCache[prefabName] = normalizedOffsets;
+        return normalizedOffsets;
+    }
+    const defaultOffsets = {
+        positionOffset: { x: 0, y: 0, z: 0 },
+        rotationOffset: { x: 0, y: 0, z: 0 },
+        scaleMultiplier: { x: 1, y: 1, z: 1 }
+    };
+    prefabOffsetCache[prefabName] = defaultOffsets;
+    return defaultOffsets;
+}
+function transformPositionFromUnity(x, y, z) {return new THREE.Vector3(x, y, -z);}
+function transformRotationFromUnity(rotX, rotY, rotZ) {
+    return {
+        x: -rotX,
+        y: -rotY,
+        z: -rotZ
+    };
+}
+function applyTransformWithLocalOffsets(obj, unityX, unityY, unityZ, unityRot, baseScale, offsets) {
+    const normalizedPos = transformPositionFromUnity(unityX || 0, unityY || 0, unityZ || 0);
+    const normalizedRot = transformRotationFromUnity(
+        unityRot?.x || 0,
+        unityRot?.y || 0,
+        unityRot?.z || 0
+    );
+    obj.updateMatrixWorld(true);
+    const glbScale = new THREE.Vector3();
+    const glbQuat = new THREE.Quaternion();
+    const glbPos = new THREE.Vector3();
+    obj.matrixWorld.decompose(glbPos, glbQuat, glbScale);
+    const posOffset = offsets?.positionOffset ?? offsets?.localPositionOffset;
+    const rotOffset = offsets?.rotationOffset ?? offsets?.localRotationOffset;
+    const scaleOff = offsets?.scaleMultiplier ?? offsets?.localScaleOffset;
+    const normalizedQuat = new THREE.Quaternion();
+    const normalizedEuler = new THREE.Euler(
+        THREE.MathUtils.degToRad(normalizedRot.x),
+        THREE.MathUtils.degToRad(normalizedRot.y),
+        THREE.MathUtils.degToRad(normalizedRot.z),
+        'YXZ'
+    );
+    normalizedQuat.setFromEuler(normalizedEuler);
+    let localOffset = new THREE.Vector3(0, 0, 0);
+    if (posOffset) {localOffset.set(posOffset.x || 0, posOffset.y || 0, posOffset.z || 0);}
+    localOffset.applyQuaternion(normalizedQuat);
+    const finalPosition = normalizedPos.clone().add(localOffset);
+    obj.position.copy(finalPosition);
+    let finalQuat = normalizedQuat.clone();
+    if (rotOffset) {
+        const offsetEuler = new THREE.Euler(
+            THREE.MathUtils.degToRad(rotOffset.x || 0),
+            THREE.MathUtils.degToRad(rotOffset.y || 0),
+            THREE.MathUtils.degToRad(rotOffset.z || 0),
+            'YXZ'
+        );
+        const offsetQuat = new THREE.Quaternion().setFromEuler(offsetEuler);
+        finalQuat.multiply(offsetQuat);
+    }
+    obj.quaternion.copy(finalQuat);
+    let scaleX = baseScale?.x || 1;
+    let scaleY = baseScale?.y || 1;
+    let scaleZ = baseScale?.z || 1;
+    if (scaleOff) {
+        scaleX *= (scaleOff.x || 1);
+        scaleY *= (scaleOff.y || 1);
+        scaleZ *= (scaleOff.z || 1);
+    }
+    obj.scale.set(
+        glbScale.x * scaleX,
+        glbScale.y * scaleY,
+        glbScale.z * scaleZ
+    );
+}
+async function processPrefab(prefab, index) {
     const pos = prefab.position || prefab.Position || prefab.pos || prefab.Postion;
-    if (!pos) return;
-    const x = pos[0] !== undefined ? pos[0] : (pos.x || 0);
-    const z = -(pos[2] !== undefined ? pos[2] : (pos.z || 0));
-    const terrainHeight = getTerrainHeightAt(x, z);
+    if (!pos) {return;}
+    const unityX = pos[0] !== undefined ? pos[0] : (pos.x || 0);
+    const unityY = pos[1] !== undefined ? pos[1] : (pos.y || 0);
+    const unityZ = pos[2] !== undefined ? pos[2] : (pos.z || 0);
+    const rot = prefab.rotation || prefab.Rotation || prefab.rot || { x: 0, y: 0, z: 0 };
+    const unityRot = {
+        x: rot[0] !== undefined ? rot[0] : (rot.x || 0),
+        y: rot[1] !== undefined ? rot[1] : (rot.y || 0),
+        z: rot[2] !== undefined ? rot[2] : (rot.z || 0)
+    };
+    const scaleData = prefab.scale || prefab.Scale || { x: 1, y: 1, z: 1 };
+    const baseScale = {
+        x: scaleData[0] !== undefined ? scaleData[0] : (scaleData.x || 1),
+        y: scaleData[1] !== undefined ? scaleData[1] : (scaleData.y || 1),
+        z: scaleData[2] !== undefined ? scaleData[2] : (scaleData.z || 1)
+    };
     const prefabName = prefab.Name || 'Unknown';
     const modelUrl = window.location.origin + '/Models/' + prefabName + '.glb';
-    const rot = prefab.rotation || prefab.Rotation || prefab.rot;
-    const scale = prefab.scale || prefab.Scale;
-    const applyTransform = (obj, offset, x, y, z, baseScale, baseRot) => {
-    if (baseScale) obj.scale.set(baseScale.x || 1, baseScale.y || 1, baseScale.z || 1);
-    if (baseRot) obj.rotation.set(baseRot.x || 0, -baseRot.y || 0, baseRot.z || 0);
-    obj.position.set(x, y + offset, z);
-    };
+    const offsets = await loadPrefabOffset(prefabName);
     if (loadedGLBModels[modelUrl]) {
         const cached = loadedGLBModels[modelUrl];
         const model = cached.scene.clone();
-        applyTransform(model, cached.bottomOffset, x, terrainHeight, z, scale, rot);
+        applyTransformWithLocalOffsets(model, unityX, unityY, unityZ, unityRot, baseScale, offsets);
         scene.add(model);
         prefabMarkers.push(model);
-        addPrefabLabel(prefabName, x, terrainHeight, z);
+        addPrefabLabel(prefabName, model.position.x, model.position.y, model.position.z);
         return;
     }
     loadGLBModel(
         modelUrl,
         (gltf) => {
             const model = gltf.scene;
-            if (scale) model.scale.set(scale.x || 1, scale.y || 1, scale.z || 1);
             const box = new THREE.Box3().setFromObject(model);
             const modelHeight = box.max.y - box.min.y;
-            const bottomOffset = -box.min.y; 
-            loadedGLBModels[modelUrl] = { scene: model, bottomOffset: bottomOffset, height: modelHeight };
-            applyTransform(model, bottomOffset, x, terrainHeight, z, scale, rot);
-            scene.add(model);
-            prefabMarkers.push(model);
-            addPrefabLabel(prefabName, x, terrainHeight, z);
+            const bottomOffset = -box.min.y;
+            loadedGLBModels[modelUrl] = {scene: model,bottomOffset: bottomOffset};
+            const clonedModel = model.clone();
+            applyTransformWithLocalOffsets(clonedModel, unityX, unityY, unityZ, unityRot, baseScale, offsets);
+            scene.add(clonedModel);
+            prefabMarkers.push(clonedModel);
+            addPrefabLabel(prefabName, clonedModel.position.x, clonedModel.position.y, clonedModel.position.z);
             log(`Loaded GLB: ${prefabName}`, 'success');
         },
         (err) => {
-            createCubeMarker(prefabName, x, terrainHeight, z);
+            const markerPos = transformPositionFromUnity(unityX, unityY, unityZ);
+            createCubeMarker(prefabName, markerPos.x, markerPos.y, markerPos.z);
         }
     );
 }
-
-function addPrefabLabel(name, x, terrainHeight, z, modelHeight = 10) {
+function addPrefabLabel(name, x, y, z, modelHeight = 10) {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     canvas.width = 512; canvas.height = 128;
@@ -8552,44 +8802,34 @@ function addPrefabLabel(name, x, terrainHeight, z, modelHeight = 10) {
     ctx.textAlign = 'center';
     ctx.fillText(name, 256, 64);
     const texture = new THREE.CanvasTexture(canvas);
-    const spriteMat = new THREE.SpriteMaterial({ 
+    const spriteMat = new THREE.SpriteMaterial({
         map: texture,
         depthTest: false,
-        sizeAttenuation: true 
+        sizeAttenuation: true
     });
-    
     const sprite = new THREE.Sprite(spriteMat);
-    sprite.position.set(x, terrainHeight + modelHeight + 5, z);
+    sprite.position.set(x, y + modelHeight + 5, z);
     sprite.scale.set(80, 20, 1);
-    
     scene.add(sprite);
     prefabMarkers.push(sprite);
 }
-
-function createCubeMarker(name, x, terrainHeight, z) {
+function createCubeMarker(name, x, y, z) {
     const markerGeo = new THREE.BoxGeometry(5, 5, 5);
     const markerMat = new THREE.MeshBasicMaterial({ color: 0xff6600, opacity: 0.9, transparent: true });
     const marker = new THREE.Mesh(markerGeo, markerMat);
-    marker.position.set(x, terrainHeight + 5, z);
+    marker.position.set(x, y, z);
     scene.add(marker);
     prefabMarkers.push(marker);
-    addPrefabLabel(name, x, terrainHeight, z);
+    addPrefabLabel(name, x, y, z);
 }
-
-function drawPrefabs(prefabsData) {
+async function drawPrefabs(prefabsData) {
     if (!prefabsData || prefabsData.length === 0) return;
     initGLTFLoader();
     const maxPrefabs = Math.min(prefabsData.length, 100);
-    for (let i = 0; i < maxPrefabs; i++) {
-        processPrefab(prefabsData[i], i);
-    }
-
-    if (prefabsData.length > 100) {
-        log(`Showing ${maxPrefabs} of ${prefabsData.length} prefabs (limited for performance)`, 'info');
-    }
+    for (let i = 0; i < maxPrefabs; i++) {processPrefab(prefabsData[i], i);}
+    if (prefabsData.length > 150) {log(`Showing ${maxPrefabs} of ${prefabsData.length} prefabs (limited for performance)`, 'info');}
     log(`Processing ${maxPrefabs} prefabs...`, 'success');
 }
-
 function createDemoTerrain() {
     log('Generating BMGJET Demo');
     const res = SEGMENTS + 1;
@@ -8603,7 +8843,7 @@ function createDemoTerrain() {
     ctx.fillStyle = 'black';
     ctx.fillRect(0, 0, res, res);
     ctx.fillStyle = 'white';
-    ctx.font = `bold ${res * 0.15}px Arial`; 
+    ctx.font = `bold ${res * 0.15}px Arial`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('BMGJET', res / 2, res / 2);
@@ -8614,7 +8854,7 @@ function createDemoTerrain() {
     const x = i % res;
     const y = Math.floor(i / res);
     const pixelIndex = (y * res + x) * 4;
-    const isLand = imageData[pixelIndex] > 128; 
+    const isLand = imageData[pixelIndex] > 128;
     const h = isLand ? 20 : -50;
     vertices[i * 3 + 2] = h * (window.HEIGHT_SCALE || 1.0);
     const activeColor = isLand ? sandColor : waterColor;
@@ -8625,12 +8865,11 @@ function createDemoTerrain() {
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
     const material = new THREE.MeshLambertMaterial({ vertexColors: true });
-    if (terrain) scene.remove(terrain); 
+    if (terrain) scene.remove(terrain);
     terrain = new THREE.Mesh(geometry, material);
     terrain.rotation.x = -Math.PI / 2;
     scene.add(terrain);
 }
-
         function setupControls() {
             document.addEventListener('keydown', (e) => {
                 switch(e.code) {
@@ -8641,7 +8880,6 @@ function createDemoTerrain() {
                     case 'ShiftLeft': case 'ShiftRight': keys.shift = true; break;
                 }
             });
-
             document.addEventListener('keyup', (e) => {
                 switch(e.code) {
                     case 'KeyW': keys.w = false; break;
@@ -8651,12 +8889,8 @@ function createDemoTerrain() {
                     case 'ShiftLeft': case 'ShiftRight': keys.shift = false; break;
                 }
             });
-
             document.addEventListener('click', () => renderer.domElement.requestPointerLock());
-            document.addEventListener('pointerlockchange', () => {
-                isPointerLocked = document.pointerLockElement === renderer.domElement;
-            });
-
+            document.addEventListener('pointerlockchange', () => {isPointerLocked = document.pointerLockElement === renderer.domElement;});
             document.addEventListener('mousemove', (e) => {
                 if (!isPointerLocked) return;
                 euler.setFromQuaternion(camera.quaternion);
@@ -8665,32 +8899,41 @@ function createDemoTerrain() {
                 euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
                 camera.quaternion.setFromEuler(euler);
             });
-
             window.addEventListener('resize', () => {
                 camera.aspect = window.innerWidth / window.innerHeight;
                 camera.updateProjectionMatrix();
                 renderer.setSize(window.innerWidth, window.innerHeight);
             });
         }
-
         function updateMovement(delta) {
-            if (!isPointerLocked) return;
-            direction.z = Number(keys.w) - Number(keys.s);
-            direction.x = Number(keys.d) - Number(keys.a);
-            direction.normalize();
-            const baseSpeed = moveSpeed * delta;
-            const speed = keys.shift ? baseSpeed * 6 : baseSpeed;
-
-            camera.translateX(direction.x * speed);
-            camera.translateY(direction.y * speed);
-            camera.translateZ(-direction.z * speed);
-
-            if (window.terrainLoaded) {
-                const terrainHeight = getTerrainHeight(camera.position.x, camera.position.z);
+            let moveX = 0;
+            let moveZ = 0;
+            let currentSpeed = moveSpeed;
+            if (isMobile && joystickActive) {
+                moveX = joystickDeltaX;
+                moveZ = -joystickDeltaY;
+                currentSpeed = moveSpeed * mobileSpeedMultiplier;
+            }
+            if (!isMobile) {
+                if (!isPointerLocked && joystickDeltaX === 0 && joystickDeltaY === 0) {return;}
+                moveZ = Number(keys.w) - Number(keys.s);
+                moveX = Number(keys.d) - Number(keys.a);
+                currentSpeed = keys.shift ? moveSpeed * 6 : moveSpeed;
+            }
+            if (moveX !== 0 || moveZ !== 0) {
+                const speed = currentSpeed * delta;
+                const forward = new THREE.Vector3();
+                const right = new THREE.Vector3();
+                camera.getWorldDirection(forward);
+                forward.normalize();
+                right.crossVectors(forward, new THREE.Vector3(0, 1, 0));
+                const movement = new THREE.Vector3();
+                movement.addScaledVector(right, moveX * speed);
+                movement.addScaledVector(forward, moveZ * speed);
+                camera.position.add(movement);
             }
             document.getElementById('pos-display').textContent = `${camera.position.x.toFixed(0)}, ${camera.position.y.toFixed(0)}, ${camera.position.z.toFixed(0)}`;
         }
-
         function getTerrainHeight(x, z) {
             if (window.terrainHeights && window.terrainResolution) {
                 const res = window.terrainResolution;
@@ -8709,7 +8952,6 @@ function createDemoTerrain() {
             }
             return 0;
         }
-
         function updateRotationDisplay() {
             const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
             const x = THREE.MathUtils.radToDeg(euler.x);
@@ -8717,7 +8959,6 @@ function createDemoTerrain() {
             const z = THREE.MathUtils.radToDeg(euler.z);
             document.getElementById('rot-display').textContent = `${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`;
         }
-
         let lastTime = performance.now();
         function animate() {
             requestAnimationFrame(animate);
