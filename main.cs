@@ -7837,10 +7837,10 @@ form.addEventListener('submit',e=>{
     <title>3D Map</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { 
-            overflow: hidden; 
-            font-family: 'Segoe UI', Arial, sans-serif; 
-            background: #1a1a2e; 
+        html, body {
+            overflow: hidden;
+            font-family: 'Segoe UI', Arial, sans-serif;
+            background: #1a1a2e;
             touch-action: none;
             position: fixed;
             width: 100%;
@@ -7995,6 +7995,7 @@ form.addEventListener('submit',e=>{
         <label><input type=""checkbox"" id=""showRails"" checked> Rails</label>
         <label><input type=""checkbox"" id=""showPrefabs"" checked> Prefabs</label>
         <label><input type=""checkbox"" id=""showWater"" checked> Water</label>
+        <label><input type=""checkbox"" id=""showBB"" checked> Building Block</label>
     </div>
     <div id=""controls"">
         <h3>Navigation Controls</h3>
@@ -8019,12 +8020,12 @@ form.addEventListener('submit',e=>{
         let railLines = [];
         let showDebug = false;
         let prefabMarkers = [];
+        let BBMarkers = [];
         let isPointerLocked = false;
         let moveSpeed = 50;
         let lookSpeed = 0.002;
         const keys = { w: false, a: false, s: false, d: false, shift: false };
         const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-        const direction = new THREE.Vector3();
         let TERRAIN_SIZE = 1000;
         let HEIGHT_SCALE = 1;
         let SEGMENTS = 512;
@@ -8033,6 +8034,7 @@ form.addEventListener('submit',e=>{
         let showRails = true;
         let showPrefabs = true;
         let showWater = true;
+        let showBB = true;
         let waterMesh = null;
         const CHECKBOX_STATE_KEY = 'mapViewer.layerStates';
         const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
@@ -8046,15 +8048,151 @@ form.addEventListener('submit',e=>{
         let lookTouchId = null;
         let lastLookX = 0;
         let lastLookY = 0;
+        const BBMarkerConfig = {
+'launch_site_1': { size: [775, 311, 476], type: 'cube', opacity: 0.2 },
+'water_well_e': { radius: 24, type: 'sphere', opacity: 0.2 },
+'water_well_d': { radius: 24, type: 'sphere', opacity: 0.2 },
+'water_well_c': { radius: 24, type: 'sphere', opacity: 0.2 },
+'water_well_b': { radius: 24, type: 'sphere', opacity: 0.2 },
+'water_well_a': { radius: 24, type: 'sphere', opacity: 0.2 },
+'stables_b': { radius: 85, type: 'sphere', opacity: 0.2 },
+'stables_a': { radius: 85, type: 'sphere', opacity: 0.2 },
+'sphere_tank': { radius: 130, type: 'sphere', opacity: 0.2 },
+'satellite_dish': { radius: 170, type: 'sphere', opacity: 0.2 },
+'mining_quarry_c': { radius: 70, type: 'sphere', opacity: 0.2 },
+'mining_quarry_b': { radius: 70, type: 'sphere', opacity: 0.2 },
+'mining_quarry_a': { radius: 70, type: 'sphere', opacity: 0.2 },
+'warehouse': { radius: 100, type: 'sphere', opacity: 0.2 },
+'supermarket_1': { radius: 120, type: 'sphere', opacity: 0.2 },
+'radtown_1': { radius: 130, type: 'sphere', opacity: 0.2 },
+'gas_station_1': { radius: 120, type: 'sphere', opacity: 0.2 },
+'oilrig_2': { size: [128, 150, 128], type: 'cube', opacity: 0.2 },
+'oilrig_1': { size: [128, 150, 138], type: 'cube', opacity: 0.2 },
+'desert_military_base_d': { radius: 200, type: 'sphere', opacity: 0.2 },
+'desert_military_base_c': { radius: 150, type: 'sphere', opacity: 0.2 },
+'desert_military_base_b': { radius: 150, type: 'sphere', opacity: 0.2 },
+'desert_military_base_a': { radius: 150, type: 'sphere', opacity: 0.2 },
+'radtown_small_3': { size: [250, 64, 250], type: 'cube', opacity: 0.2 },
+'nuclear_missile_silo': { radius: 170, type: 'sphere', opacity: 0.2 },
+'junkyard_1': { radius: 170, type: 'sphere', opacity: 0.2 },
+'compound': { radius: 200, type: 'sphere', opacity: 0.2 },
+'bandit_town': { radius: 150, type: 'sphere', opacity: 0.2 },
+'lighthouse': { radius: 100, type: 'sphere', opacity: 0.2 },
+'water_treatment_plant_1': { size: [350, 165, 450], type: 'cube', opacity: 0.2 },
+'trainyard_1': { size: [400, 128, 400], type: 'cube', opacity: 0.2  },
+'powerplant_1': { radius: 210, type: 'sphere', opacity: 0.2 },
+'military_tunnel_1': { radius: 210, type: 'sphere', opacity: 0.2 },
+'excavator_1': { radius: 220, type: 'sphere', opacity: 0.2 },
+'airfield_1': { size: [512, 85, 384], type: 'cube', opacity: 0.2 },
+'jungle_ziggurat_a': { radius: 80, type: 'sphere', opacity: 0.2 },
+'jungle_ruins_e': { radius: 32, type: 'sphere', opacity: 0.2 },
+'jungle_ruins_d': { radius: 32, type: 'sphere', opacity: 0.2 },
+'jungle_ruins_c': { radius: 32, type: 'sphere', opacity: 0.2 },
+'jungle_ruins_b': { radius: 32, type: 'sphere', opacity: 0.2 },
+'jungle_ruins_a': { radius: 32, type: 'sphere', opacity: 0.2 },
+'harbor_2': { radius: 250, type: 'sphere', opacity: 0.2 },
+'harbor_1': { radius: 250, type: 'sphere', opacity: 0.2 },
+'ferry_terminal_1': { radius: 200, type: 'sphere', opacity: 0.2 },
+'fishing_village_c': { radius: 125, type: 'sphere', opacity: 0.2 },
+'fishing_village_b': { radius: 100, type: 'sphere', opacity: 0.2 },
+'fishing_village_a': { radius: 125, type: 'sphere', opacity: 0.2 },
+'cave_small_medium': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
+'cave_small_hard': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
+'cave_small_easy': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
+'cave_medium_medium': { size: [130, 64, 100], type: 'cube', opacity: 0.2 },
+'cave_medium_hard': { size: [120, 64, 130], type: 'cube', opacity: 0.2 },
+'cave_medium_easy': { size: [100, 64, 80], type: 'cube', opacity: 0.2 },
+'cave_large_sewers_hard': { size: [120, 64, 120], type: 'cube', opacity: 0.2 },
+'cave_large_medium': { size: [100, 64, 130], type: 'cube', opacity: 0.2 },
+'cave_large_hard': { size: [150, 64, 180], type: 'cube', opacity: 0.2 },
+'arctic_research_base_a': { radius: 140, type: 'sphere', opacity: 0.2 },
+        };
+        function isBBMarkerType(prefabName) {return BBMarkerConfig.hasOwnProperty(prefabName);}
+        function getBBConfig(label) {return BBMarkerConfig[label] || null;}
+        function createBBSphereMarker(x, y, z, radius, label, opacity = 0.4) {
+            const geometry = new THREE.SphereGeometry(radius, 32, 32);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xff0000,
+                transparent: true,
+                opacity: opacity,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+            const sphere = new THREE.Mesh(geometry, material);
+            sphere.position.set(x, y, z);
+            sphere.renderOrder = 10;
+            scene.add(sphere);
+            BBMarkers.push(sphere);
+            return sphere;
+        }
+        function createBBCubeMarker(x, y, z, sizeX, sizeY, sizeZ, rotX, rotY, rotZ, label, opacity = 0.35) {
+            const geometry = new THREE.BoxGeometry(sizeX, sizeY, sizeZ);
+            const material = new THREE.MeshBasicMaterial({
+                color: 0xff0000,
+                transparent: true,
+                opacity: opacity,
+                side: THREE.DoubleSide,
+                depthWrite: false
+            });
+            const cube = new THREE.Mesh(geometry, material);
+            cube.position.set(x, y, z);
+            const euler = new THREE.Euler(
+                THREE.MathUtils.degToRad(-rotX),
+                THREE.MathUtils.degToRad(-rotY),
+                THREE.MathUtils.degToRad(-rotZ),
+                'YXZ'
+            );
+            cube.rotation.copy(euler);
+            cube.renderOrder = 10;
+            scene.add(cube);
+            BBMarkers.push(cube);
+            return cube;
+        }  
+        function createBBMarkerFromPrefab(prefab) {
+            const pos = prefab.position || prefab.Position || prefab.pos || prefab.Postion;
+            if (!pos) {return;}
+            const rot = prefab.rotation || prefab.Rotation || prefab.rot || { x: 0, y: 0, z: 0 };
+            const prefabName = prefab.Name || 'Unknown';
+            const config = getBBConfig(prefabName);
+            if (!config) {return;}
+            const x = pos[0] !== undefined ? pos[0] : (pos.x || 0);
+            const y = pos[1] !== undefined ? pos[1] : (pos.y || 0);
+            const z = pos[2] !== undefined ? -pos[2] : -(pos.z || 0);
+            const rotX = rot[0] !== undefined ? rot[0] : (rot.x || 0);
+            const rotY = rot[1] !== undefined ? rot[1] : (rot.y || 0);
+            const rotZ = rot[2] !== undefined ? rot[2] : (rot.z || 0);
+            switch (config.type) {
+                case 'cube':
+                    let sizeX, sizeY, sizeZ;
+                    if (Array.isArray(config.size)) {
+                        sizeX = config.size[0];
+                        sizeY = config.size[1];
+                        sizeZ = config.size[2];
+                    } else {
+                        const s = config.radius || 50;
+                        sizeX = s;
+                        sizeY = s;
+                        sizeZ = s;
+                    }
+                    createBBCubeMarker(x, y, z, sizeX, sizeY, sizeZ, rotX, rotY, rotZ, prefabName, config.opacity);
+                    break;
+                case 'sphere':
+                default:
+                    createBBSphereMarker(x, y, z, config.radius, prefabName, config.opacity);
+                    break;
+            }
+        }
         showRoads   = applyCheckboxState('showRoads', true);
         showRails   = applyCheckboxState('showRails', true);
         showPrefabs = applyCheckboxState('showPrefabs', true);
         showWater   = applyCheckboxState('showWater', true);
+        showBB   = applyCheckboxState('showBB', true);
         showDebug   = applyCheckboxState('showDebug', false);
         setTimeout(() => {
             roadLines.forEach(line => line.visible = showRoads);
             railLines.forEach(line => line.visible = showRails);
             prefabMarkers.forEach(marker => marker.visible = showPrefabs);
+            BBMarkers.forEach(marker => marker.visible = showBB);
             if (waterMesh) waterMesh.visible = showWater;
             riverLines.forEach(line => line.visible = showWater);
         }, 1000);
@@ -8227,6 +8365,10 @@ onLayerChange('showPrefabs', (v) => {
     showPrefabs = v;
     prefabMarkers.forEach(m => m.visible = v);
 });
+onLayerChange('showBB', (v) => {
+    showBB = v;
+    BBMarkers.forEach(m => m.visible = v);
+});
 onLayerChange('showWater', (v) => {
     showWater = v;
     if (waterMesh) waterMesh.visible = v;
@@ -8312,12 +8454,6 @@ function downsampleHeightmap(data, srcRes, dstRes) {
     const WATER_LEVEL_SHORT = 16336;
     const MAX_DEVIATION_SHORT = 16336;
     const MAX_DEVIATION_METERS = 500;
-    let minH = Infinity, maxH = -Infinity;
-    for (let i = 0; i < data.length; i++) {
-        const h = data[i];
-        if (h < minH) minH = h;
-        if (h > maxH) maxH = h;
-    }
     for (let y = 0; y < dstRes; y++) {
         for (let x = 0; x < dstRes; x++) {
             const srcX = x * ratio;
@@ -8508,8 +8644,7 @@ function createTerrainMesh(heights, splatColors) {
     }
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
-    terrainMaterial = new THREE.MeshLambertMaterial({vertexColors: true});
-    terrain = new THREE.Mesh(geometry, terrainMaterial);
+    terrain = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({vertexColors: true}));
     terrain.rotation.x = -Math.PI / 2;
     scene.add(terrain);
     log('Terrain mesh created', 'success');
@@ -8826,7 +8961,19 @@ async function drawPrefabs(prefabsData) {
     if (!prefabsData || prefabsData.length === 0) return;
     initGLTFLoader();
     const maxPrefabs = Math.min(prefabsData.length, 100);
-    for (let i = 0; i < maxPrefabs; i++) {processPrefab(prefabsData[i], i);}
+    let bbMarkerCount = 0;
+    for (let i = 0; i < maxPrefabs; i++) {
+        const prefab = prefabsData[i];
+        const prefabName = prefab.Name || 'Unknown';
+        if (isBBMarkerType(prefabName)) {
+            createBBMarkerFromPrefab(prefab);
+            bbMarkerCount++;
+        } 
+            processPrefab(prefab, i);
+    }
+    if (bbMarkerCount > 0) {
+        log(`Created ${bbMarkerCount} BB markers from prefabs`, 'info');
+    }
     if (prefabsData.length > 150) {log(`Showing ${maxPrefabs} of ${prefabsData.length} prefabs (limited for performance)`, 'info');}
     log(`Processing ${maxPrefabs} prefabs...`, 'success');
 }
@@ -8933,24 +9080,6 @@ function createDemoTerrain() {
                 camera.position.add(movement);
             }
             document.getElementById('pos-display').textContent = `${camera.position.x.toFixed(0)}, ${camera.position.y.toFixed(0)}, ${camera.position.z.toFixed(0)}`;
-        }
-        function getTerrainHeight(x, z) {
-            if (window.terrainHeights && window.terrainResolution) {
-                const res = window.terrainResolution;
-                const nx = (x / TERRAIN_SIZE + 0.5) * (res - 1);
-                const ny = (1.0 - (z / TERRAIN_SIZE) + 0.5) * (res - 1);
-                if (nx < 0 || nx > res - 1 || ny < 0 || ny > res - 1) return 0;
-                const x0 = Math.floor(nx), y0 = Math.floor(ny);
-                const x1 = Math.min(x0 + 1, res - 1), y1 = Math.min(y0 + 1, res - 1);
-                const fx = nx - x0, fy = ny - y0;
-                const h00 = window.terrainHeights[y0 * res + x0] || 0;
-                const h10 = window.terrainHeights[y0 * res + x1] || 0;
-                const h01 = window.terrainHeights[y1 * res + x0] || 0;
-                const h11 = window.terrainHeights[y1 * res + x1] || 0;
-                const height = (1-fx)*(1-fy)*h00 + fx*(1-fy)*h10 + (1-fx)*fy*h01 + fx*fy*h11;
-                return height * HEIGHT_SCALE;
-            }
-            return 0;
         }
         function updateRotationDisplay() {
             const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
