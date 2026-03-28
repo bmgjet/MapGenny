@@ -121,6 +121,24 @@ namespace MapGenny
             }
         }
 
+        //CargoPathGen
+        [HarmonyPatch(typeof(BaseBoat), nameof(BaseBoat.GenerateOceanPatrolPath))]
+        public static class BaseBoat_GenerateOceanPatrolPath
+        {
+            [HarmonyPrefix]
+            private static bool Prefix() 
+            {
+                if (Library.breakprefab)
+                {
+                    Library.WaitingForBreaker = false;
+                    Library._continueEvent.Reset();
+                    Library._continueEvent.Wait();
+                    return false; //dont run
+                }
+                return true;  //normal
+            }         
+        }
+
         //Block rcon
         [HarmonyPatch(typeof(Facepunch.RCon), nameof(Facepunch.RCon.Initialize))]
         public static class RCon_Patch
@@ -798,6 +816,7 @@ namespace MapGenny
                 Library.AllowUpload = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowuploads", Facepunch.Utility.CommandLine.GetSwitch("-allowuploads", (Library.IP == "localhost" ? "true" : "false"))));
                 Library.AllowJobs = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowjobs", Facepunch.Utility.CommandLine.GetSwitch("-allowjobs", "true")));
                 Library.AllowCubes = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowcubes", Facepunch.Utility.CommandLine.GetSwitch("-allowcubes", "true")));
+                Library.Allow3D = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allow3d", Facepunch.Utility.CommandLine.GetSwitch("-allow3d", "true")));
                 Library.AllowBreakPrefab = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowbreakprefab", Facepunch.Utility.CommandLine.GetSwitch("-allowbreakprefab", (Library.IP == "localhost" ? "true" : "false"))));
                 Library.CubesOnly = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+cubesonly", Facepunch.Utility.CommandLine.GetSwitch("-cubesonly", "false")));
                 Library.DeleteCustomPrefabs = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+deletecustomprefabs", Facepunch.Utility.CommandLine.GetSwitch("-deletecustomprefabs", "true")));
@@ -845,7 +864,8 @@ Library.DeleteCustomPrefabs = false;
                 if (Library.AllowBreakPrefab) { Library.BreakPrefabPage = Encoding.UTF8.GetBytes(Pages.BreakPrefabHtml); }
                 Library.QuitPage = Encoding.UTF8.GetBytes(Pages.QuitPagehtml);
                 Library.PasswordPage = Encoding.UTF8.GetBytes(Pages.PasswordPagehtml);
-                Library.MapViewer = Encoding.UTF8.GetBytes(Pages.MapViewer);
+                if (Library.Allow3D){Library.MapViewer = Encoding.UTF8.GetBytes(Pages.MapViewer);}
+                else{ Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace("<button class='btn' id='_3DBtn'>3D View</button><br>", "")); }
                 Library.StartWebServer();
                 try
                 {
@@ -925,6 +945,11 @@ Library.DeleteCustomPrefabs = false;
                         Console.Write($"[MapGenny] {config.Key} = {config.Value}" + System.Environment.NewLine);
                     }
 #endif
+                    if(Library.breakprefab)
+                    {
+                        Console.Write($"[MapGenny] BreakPrefab");
+                        return true;
+                    }
                     //Set map size
                     if (Library.ConfigVars.TryGetValue("map.size", out var msize) && uint.TryParse(msize, out var sizeVal))
                     {
@@ -1401,6 +1426,7 @@ Library.DeleteCustomPrefabs = false;
             public static bool AllowUpload = false;
             public static bool AllowJobs = false;
             public static bool AllowCubes = false;
+            public static bool Allow3D = false;
             public static bool AllowBreakPrefab = false;
             public static bool CubesOnly = false;
             public static float MAP_BOUNDARY = 3800f;
@@ -1415,7 +1441,11 @@ Library.DeleteCustomPrefabs = false;
             public static SerializedAPCPathList REserializedAPCPathList = new SerializedAPCPathList();
             public static SerializedBlockList RESerializedBlockList = new SerializedBlockList();
             public static AnchoredPathList RESerializedAnchoredPathList = new AnchoredPathList();
+
+            //
             public static ManualResetEventSlim _continueEvent = new ManualResetEventSlim(false);
+            public static uint PrefabBreakerID = 0;
+            public static bool WaitingForBreaker = true;
 
             //http stuff
             private static HttpListener _listener;
@@ -4120,49 +4150,91 @@ Library.DeleteCustomPrefabs = false;
                         }
                         pos = nextBoundary;
                     }
-
+                    PrefabBreakerID = 0;
+                    //Convert to uint and check if exsists
                     bool isUint = prefabValue.All(char.IsDigit);
-                    if (isUint && uint.TryParse(prefabValue, out uint prefabId))
+                    if (isUint && uint.TryParse(prefabValue, out PrefabBreakerID))
                     {
-                        Console.WriteLine($"Breaking prefab by ID: {prefabId}");
-                        Respond(Breaker("", prefabId), ctx);
+                      if(!StringPool.toString.ContainsKey(PrefabBreakerID)){PrefabBreakerID = 0;} //Not a valid prefabid
                     }
-                    else
+                    if (PrefabBreakerID == 0 && !string.IsNullOrEmpty(prefabValue))
                     {
-                        Console.WriteLine($"Breaking prefab by path: {prefabValue}");
-                        Respond(Breaker(prefabValue, 0), ctx);
+                        prefabValue = prefabValue.ToLower();
+                        if (!prefabValue.EndsWith(".prefab")){prefabValue = prefabValue + ".prefab";}
+                        foreach(var s in StringPool.toNumber)
+                        {
+                            if(s.Key.EndsWith(prefabValue))
+                            {
+                                PrefabBreakerID = s.Value;
+                                break;
+                            }
+                        }
                     }
+                    if (PrefabBreakerID != 0)
+                    {
+                        breakprefab = true;
+                        var breakerworld = InitializeWorldSerialization();
+                        breakerworld.AddPrefab("decor", PrefabBreakerID, Vector3.zero, quaternion.Euler(Vector3.zero), Vector3.one);
+                        string baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                        string fullPath = Path.Combine(baseDir, PrefabBreakerID + ".map");
+                        breakerworld.world.size = 1000;
+                        breakerworld.Save(fullPath);
+                        ConVar.Server.levelurl = "file:///" + fullPath;
+                        //Send Html That just keeps redirecting.
+                        await SafeWrite(ctx.Response, Encoding.UTF8.GetBytes("Processing..."), "text/html");
+                        _continueEvent.Set();
+                        return;
+                    }
+                    ctx.Response.StatusCode = 400;
+                    await SafeWrite(ctx.Response, Encoding.UTF8.GetBytes("Invalid PrefabID/PrefabPath"), "text/html");
                 }
                 catch { }
             }
 
+            public static async Task FinishBreaking(HttpListenerContext ctx)
+            {
+                if(WaitingForBreaker)
+                {
+                    await SafeWrite(ctx.Response, Encoding.UTF8.GetBytes("Processing..."), "text/html");
+                    return;
+                }
+                if(PrefabBreakerID != 0)
+                { 
+                    Console.WriteLine($"Breaking prefab: {PrefabBreakerID}");
+                    Respond(Breaker(PrefabBreakerID), ctx);
+                    Library.Restart = true;
+                    if(File.Exists(PrefabBreakerID + ".map")){File.Delete(PrefabBreakerID + ".map");}
+                    if (File.Exists(World.MapFolderName + "/" + PrefabBreakerID + ".map")) { File.Delete(World.MapFolderName + "/" + PrefabBreakerID + ".map"); }
+                    string hashname = string.Format("{0}_{1}.map", global::World.Name, global::World.Url.MurmurHashUnsigned());
+                    if (File.Exists(hashname)) { File.Delete(hashname); }
+                    await Task.Delay(TimeSpan.FromSeconds(5.0));
+                    RestartServer();
+                    ConsoleSystem.Run(ConsoleSystem.Option.Server.Quiet(), "quit", new object[0]);
+                    _continueEvent.Set();
+                    System.Environment.Exit(0);
+                }
+            }
+
             public static void Respond(string finalPath, HttpListenerContext ctx)
             {
-                string DownloadURL = null;
-                try { 
-                        // Logic resumes once Coroutine calls SetResult
-                        if (string.IsNullOrEmpty(finalPath))
-                        {
-                            DownloadURL = "Error breaking: returned null path.";
-                        }
-                        else
-                        {
-                            DownloadURL = BlobDownload(finalPath);
-                        }
-                    
+                try
+                {
+                    if (string.IsNullOrEmpty(finalPath) || !File.Exists(finalPath))
+                    {
+                        SendError(ctx, "File not found or path is empty.");
+                        return;
+                    }
+                    byte[] fileBytes = File.ReadAllBytes(finalPath);
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/octet-stream";
+                    string fileName = Path.GetFileName(finalPath);
+                    ctx.Response.AddHeader("Content-Disposition", $"attachment; filename=\"{fileName}\"");
+                    ctx.Response.ContentLength64 = fileBytes.Length;
+                    ctx.Response.OutputStream.Write(fileBytes, 0, fileBytes.Length);
                 }
                 catch (Exception ex)
                 {
-                    DownloadURL = $"Error processing break request: {ex.Message}";
-                }
-
-                // Now that the data is ready, send the response
-                try
-                {
-                    ctx.Response.StatusCode = 200;
-                    ctx.Response.ContentType = "text/plain";
-                    var bytes = Encoding.UTF8.GetBytes(DownloadURL);
-                    ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
+                    SendError(ctx, $"Error processing file: {ex.Message}");
                 }
                 finally
                 {
@@ -4170,29 +4242,11 @@ Library.DeleteCustomPrefabs = false;
                 }
             }
 
-            public static string BlobDownload(string filePath)
+            private static void SendError(HttpListenerContext ctx, string message)
             {
-                string baseDirectory = AppDomain.CurrentDomain.BaseDirectory;
-                filePath = Path.Combine(baseDirectory, filePath);
-                Console.Write(filePath);
-                if (File.Exists(filePath))
-                {
-                    try
-                    {
-                        byte[] fileBytes = File.ReadAllBytes(filePath);
-                        string base64String = Convert.ToBase64String(fileBytes);
-                        string contentType = "application/octet-stream";
-                        return $"data:{contentType};base64,{base64String}";
-                    }
-                    catch (Exception ex)
-                    {
-                        return $"Error reading file: {ex.Message}";
-                    }
-                }
-                else
-                {
-                    return "Error: File not found on server.";
-                }
+                ctx.Response.StatusCode = 404;
+                byte[] errorBytes = Encoding.UTF8.GetBytes(message);
+                ctx.Response.OutputStream.Write(errorBytes, 0, errorBytes.Length);
             }
 
             public static Bitmap ProcessImage(byte[] imageBytes, int targetWidth, int targetHeight, double smoothing, bool rotate)
@@ -4576,7 +4630,17 @@ Library.DeleteCustomPrefabs = false;
 
             private static async Task ServeCubesHtml(HttpListenerContext ctx) { await SafeWrite(ctx.Response, PNG2CubesPage, "text/html"); }
 
-            private static async Task ServeBreakHtml(HttpListenerContext ctx) { await SafeWrite(ctx.Response, BreakPrefabPage, "text/html"); }
+            private static async Task ServeBreakHtml(HttpListenerContext ctx) 
+            { 
+                if (Library.Restart)
+                {
+                    await Library.HandleRestart(ctx).ConfigureAwait(false);
+                    await Task.Delay(TimeSpan.FromSeconds(2.0));
+                    Library._continueEvent.Set(); return; } 
+                if (breakprefab) { await FinishBreaking(ctx); return; } 
+                await SafeWrite(ctx.Response, BreakPrefabPage, "text/html"); 
+            }
+
 
             private static async Task HandleJobsUpload(HttpListenerContext ctx)
             {
@@ -5572,72 +5636,20 @@ Library.DeleteCustomPrefabs = false;
                 SaveCargoPath(BaseBoat.GenerateOceanPatrolPath(shoredistance, shoredepth), "oceanpathpoints");
             }
 
-            
-            public static string Breaker(string prefab = "", uint PrefabID = 0)
+            public static string Breaker(uint PrefabID = 0)
             {
-                //Likely wont work on a lot of prefabs and may crash since only the main thread can load asset bundles correctly.
-                //Would have to completely change the way its done. Such as create a blank map with just that prefab on it. Then start server with that map so main thread spawns everything.
-                //Then restart server after it creates a dump.
-                breakprefab = true;
                 uint PID = PrefabID;
-                if (!string.IsNullOrEmpty(prefab)) { PID = StringPool.Get(prefab); }
                 if (PID == 0) { return "No PrefabID or Path Found!"; }
-                AssetBundleBackend assetBundleBackend = FileSystem.Backend as AssetBundleBackend;
-                List<string> Assets = assetBundleBackend.GetRequiredAssetScenesForPrefabs(new List<string>() { StringPool.Get(PID) });
-                if (!AssetSceneManifest.Current.AutoLoadScenes.Contains(Assets[0]))
-                {
-                    Console.WriteLine("\nLoading Bundle: " + Assets[0]);
-                    AssetSceneManifest.Current.AutoLoadScenes.Add(Assets[0]);
-                     assetBundleBackend.Load(Assets[0]);
-                }
-
-                // Refresh the File Index to ensure the Backend knows about the new assets
-                assetBundleBackend.BuildFileIndex();
-
-                // Now try to load
-                var gameObject = assetBundleBackend.LoadPrefab(StringPool.Get(PID));
-
                 prefabDataHolders.Clear();
                 if (Prefabs.Count == 0) { Prefabs = BuildCache(); }
-                if (gameObject == null)
-                {
-                    Console.WriteLine("Setting Up Game Object");
-                    try{gameObject = GameManager.server.CreatePrefab(StringPool.Get(PID), Vector3.zero, Quaternion.identity, true);}catch { }
-                    if (gameObject == null)
-                    {
-                        try
-                        {
-                            Prefab monument = Prefab.Load(PID);
-                            if (monument == null)
-                            {
-                                Console.WriteLine("Unable to load Prefab ID " + PID);
-                                breakprefab = false;
-                                return null;
-                            }
-                              gameObject = UnityEngine.Object.Instantiate<GameObject>(monument);
-                        }
-                        catch { }
-                    }
-
-                    if (gameObject == null)
-                    {
-                        Console.WriteLine("Unable to load Game Object");
-                        breakprefab = false;
-                        return null;
-                    }
-                }
-                string[] prefabname = gameObject.name.Split('/');
-                string MapName = prefabname[prefabname.Length - 1].Replace(".prefab", ".map");
+                var go = UnityEngine.Object.FindObjectsOfType<GameObject>();
+                string MapName = PrefabID + ".map";
                 string filepath = Path.Combine("server", ConVar.Server.identity, MapName);
-
-                gameObject.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
-                gameObject.SetActive(true);
                 int loops = 0;
                 int count = 0;
-                var allChildren = gameObject.transform.GetAllChildren().ToList();
-                int max = allChildren.Count;
+                int max = go.Count();
                 int msg = max / 15;
-                foreach (var child in allChildren)
+                foreach (var child in go)
                 {
                     count++;
                     if (child == null) continue;
@@ -5647,7 +5659,6 @@ Library.DeleteCustomPrefabs = false;
                         loops = 0;
                         Console.WriteLine($"Breaking Prefabs: {((float)count / max * 100):N0}%");
                     }
-
                     var element = Find(child.name);
                     if (element != null)
                     {
@@ -5683,19 +5694,12 @@ Library.DeleteCustomPrefabs = false;
                     worldSerialization.world.prefabs.Add(prefabDataHolder);
                 }
                 worldSerialization.Save(filepath);
-                // Cleanup
-                GameObject.Destroy(gameObject);
-                foreach (var be in BaseNetworkable.serverEntities.entityList.Get().Values) { if (be != null) { be.Kill(); } }
-                BaseNetworkable.serverEntities.entityList.Get().Clear();
-
-                Rust.Application.isLoading = false;
                 breakprefab = false;
-
                 return filepath;
             }
 
-        //Check that doesnt have same ID, Position and Roation.
-        private static bool DupeCheck(PrefabData pd, PrefabData pc)
+            //Check that doesnt have same ID, Position and Roation.
+            private static bool DupeCheck(PrefabData pd, PrefabData pc)
             {
                 if (pc.id == pd.id && pc.position.x == pd.position.x && pc.position.y == pd.position.y && pc.position.z == pd.position.z && pc.rotation.x == pd.rotation.x && pc.rotation.y == pd.rotation.y && pc.rotation.z == pd.rotation.z) { return true; }
                 return false;
@@ -5803,8 +5807,6 @@ Library.DeleteCustomPrefabs = false;
                 }
                 return list;
             }
-
-
 #endregion
         }
 
@@ -7814,54 +7816,121 @@ const themeToggle=document.getElementById('themeToggle');
 const currentTheme=localStorage.getItem('theme')||'dark';
 document.body.classList.toggle('light',currentTheme==='light');
 updateToggleLabel();
-function updateToggleLabel(){ themeToggle.textContent=document.body.classList.contains('light')?'🌙 Dark Mode':'☀️ Light Mode'; }
+function updateToggleLabel(){
+  themeToggle.textContent=document.body.classList.contains('light') ?'🌙 Dark Mode':'☀️ Light Mode';
+}
 themeToggle.addEventListener('click',()=>{
   document.body.classList.toggle('light');
   localStorage.setItem('theme',document.body.classList.contains('light')?'light':'dark');
   updateToggleLabel();
 });
-const form=document.getElementById('breakForm');
-form.addEventListener('submit',e=>{
+const form = document.getElementById('breakForm');
+const progress = document.getElementById('progress');
+const bar = document.getElementById('progressBar');
+const status = document.getElementById('statusBox');
+const breakButton = document.getElementById('breakButton');
+let retryTimer = null;
+let isRunning = false;
+form.addEventListener('submit', e => {
   e.preventDefault();
-  const input=document.getElementById('prefabInput');
-  const inputValue=input.value.trim();
-  if(!inputValue){alert('Please enter a prefabid or stringpath.');return;}
-  const xhr=new XMLHttpRequest();
-  const progress=document.getElementById('progress');
-  const bar=document.getElementById('progressBar');
-  const status=document.getElementById('statusBox');
-  progress.style.display='block';
-  status.textContent='Processing...';
-  xhr.upload.addEventListener('progress',ev=>{
-    if(ev.lengthComputable){
-      const pct=(ev.loaded/ev.total)*100;
-      bar.style.width=pct+'%';
+  if (isRunning) return;
+  isRunning = true;
+  const input = document.getElementById('prefabInput');
+  const inputValue = input.value.trim();
+  if (!inputValue) { alert('Please enter a prefabid or stringpath.'); isRunning=false; return; }
+  if (/^0+$/.test(inputValue)) { alert('PrefabID cannot be 0.'); isRunning=false; return; }
+  progress.style.display = 'block';
+  bar.style.width = '0%';
+  status.textContent = 'Processing...';
+  breakButton.disabled = true;
+  sendRequest(inputValue);
+});
+
+function sendRequest(inputValue){
+  const xhr = new XMLHttpRequest();
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState !== 4) {return;}
+    if (xhr.status === 200) {
+      const responseText = xhr.responseText?.trim();
+      if (!responseText || responseText === 'Processing...') {
+        bar.style.width = '50%';
+        breakButton.disabled = true;
+        retryTimer = setTimeout(() => sendGET(inputValue), 2000);
+        return;
+      }
+      clearTimeout(retryTimer);
+      isRunning = false;
+      bar.style.width = '100%';
+      status.innerHTML = `<span style=""font-size:13px;color:#9fd;"">${responseText}</span>`;
     }
-  });
-  xhr.onreadystatechange=()=>{
-    if (xhr.readyState === 4) {
-      if (xhr.status === 200) {
-        const responseText = xhr.responseText?.trim();
-        bar.style.width = '100%';
-        if (responseText) {
-          if (responseText.startsWith('data:')) {
-            status.innerHTML = `Break complete!<br><a href=""${responseText}"" download=""broken_prefab.map"" style=""display:inline-block;margin-top:10px;padding:5px 10px;background:#28a745;color:#fff;text-decoration:none;border-radius:3px;font-size:13px;"">💾 Download Result</a>`;
-          } else if (responseText.includes('Error')) {
-            status.innerHTML = `<span style=""color:#ff6b6b;"">${responseText}</span>`;
-          } else {
-            status.innerHTML = `Break complete!<br><span style=""font-size:13px;color:#9fd;"">Result: ${responseText}</span>`;
-          }
-        } else {
-          status.textContent = 'Break complete (no response text).';
-        }
-      } else { status.textContent = '❌ Break failed: ' + xhr.status; }
+    else {
+      clearTimeout(retryTimer);
+      isRunning = false;
+      status.textContent = '❌ Invalid PrefabID/PrefabPath: ' + xhr.status;
+      breakButton.disabled = false;
     }
   };
   xhr.open('POST','/breakprefab');
   const fd = new FormData();
   fd.append('prefab', inputValue);
   xhr.send(fd);
-});
+}
+function sendGET(inputValue) {
+  const xhr = new XMLHttpRequest();
+  xhr.open('GET', '/breakprefab');
+  xhr.responseType = 'blob';
+  xhr.onreadystatechange = () => {
+    if (xhr.readyState !== 4) {return;}
+    if (xhr.status === 200) {
+      const contentType = xhr.getResponseHeader('Content-Type');
+      if (contentType && contentType.includes('text/plain')) {
+        const reader = new FileReader();
+        reader.onload = function() {
+          const text = reader.result.trim();
+          if (!text || text === 'Processing...') {
+            bar.style.width = '50%';
+            breakButton.disabled = true;
+            retryTimer = setTimeout(() => sendGET(inputValue), 2000);
+          }
+        };
+        reader.readAsText(xhr.response);
+        return;
+      }
+      clearTimeout(retryTimer);
+      isRunning = false;
+      bar.style.width = '100%';
+      status.innerHTML = '<span style=""font-size:13px;color:#9fd;"">File Received!</span>';
+      const disposition = xhr.getResponseHeader('Content-Disposition');
+      let fileName = 'downloaded_file';
+      if (disposition && disposition.indexOf('attachment') !== -1) {
+        const filenameRegex = /filename[^;=\n]*=((['""]).*?\2|[^;\n]*)/;
+        const matches = filenameRegex.exec(disposition);
+        if (matches != null && matches[1]) fileName = matches[1].replace(/['""]/g, '');
+      }
+      const blob = xhr.response;
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      a.remove();
+      status.innerHTML = '<span style=""font-size:13px;color:#9fd;"">File Received! Restarting server…</span>';
+      setTimeout(() => {
+        breakButton.disabled = false; 
+        document.getElementById('prefabInput').value = ''; 
+        location.reload();
+      }, 10000);
+    } 
+    else {
+      clearTimeout(retryTimer);
+      isRunning = false;
+      status.textContent = '❌ Error: ' + xhr.status;
+    }
+  };
+  xhr.send();
+}
 </script>
 </body>
 </html>";
