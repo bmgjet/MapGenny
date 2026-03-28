@@ -119,7 +119,9 @@ Server Notes
 - png2cubes can be disabled:
   +allowcubes false
 - Only run png2cubes mode:
-  +cubesonly true
+  +cubesonly true 
+- 3D View can be disabled:
+  +allow3d false
 
 Advertisement markup support:
 <size=8></size>  (default scale is 8)
@@ -149,7 +151,7 @@ Custom Prefabs
 --------------------------------------------------
 Custom Prefab Template:
 Run the debug version of MapGenny.dll
-Then generate a map instead of loading custom prefabs it will dump the folder for all the templates thats on your current map would of used.
+Then generate a map instead of loading custom prefabs it will dump the folder for all the templates that your current map would of used.
 
 --------------------------------------------------
 Jobs Zip Layout
