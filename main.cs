@@ -2030,41 +2030,44 @@ Library.DeleteCustomPrefabs = false;
 
             public static string CompressAndEncode(byte[] data)
             {
-                if (data == null || data.Length == 0) return "";
-
+                if (data == null || data.Length == 0) { return string.Empty; }
                 using (var outputStream = new MemoryStream())
                 {
-                    using (var gZipStream = new GZipStream(outputStream, CompressionMode.Compress))
+                    using (var gZipStream = new GZipStream(outputStream, System.IO.Compression.CompressionLevel.Fastest, true))
                     {
                         gZipStream.Write(data, 0, data.Length);
                     }
-                    return Convert.ToBase64String(outputStream.ToArray());
+                    return Convert.ToBase64String(outputStream.GetBuffer(), 0, (int)outputStream.Length);
                 }
             }
 
-            private static byte[] DownsampleMap(byte[] originalData, int bytesPerPixel)
+            private static unsafe byte[] DownsampleMap(byte[] originalData, int bytesPerPixel)
             {
-                if (originalData == null || originalData.Length == 0) return null;
-                int srcRes = (int)Math.Sqrt(originalData.Length / bytesPerPixel);
+                if (originalData == null || originalData.Length == 0) { return null; }
+                int totalBytes = originalData.Length;
+                int srcRes = (int)Math.Sqrt(totalBytes / bytesPerPixel);
                 if (srcRes <= 2049) return originalData;
                 int dstRes = ((srcRes - 1) / 2) + 1;
                 byte[] newData = new byte[dstRes * dstRes * bytesPerPixel];
-                for (int y = 0; y < dstRes; y++)
+                fixed (byte* pSrc = originalData)
+                fixed (byte* pDst = newData)
                 {
-                    for (int x = 0; x < dstRes; x++)
+                    int srcStride = srcRes * bytesPerPixel;
+                    int dstStride = dstRes * bytesPerPixel;
+                    for (int y = 0; y < dstRes; y++)
                     {
-                        int srcX = x * 2;
-                        int srcY = y * 2;
-                        int srcIndex = (srcY * srcRes + srcX) * bytesPerPixel;
-                        int dstIndex = (y * dstRes + x) * bytesPerPixel;
-                        if (srcIndex + bytesPerPixel <= originalData.Length)
+                        byte* srcRow = pSrc + (y * 2 * srcStride);
+                        byte* dstRow = pDst + (y * dstStride);
+                        for (int x = 0; x < dstRes; x++)
                         {
-                            Array.Copy(originalData, srcIndex, newData, dstIndex, bytesPerPixel);
+                            byte* s = srcRow + (x * 2 * bytesPerPixel);
+                            byte* d = dstRow + (x * bytesPerPixel);
+                            for (int b = 0; b < bytesPerPixel; b++){d[b] = s[b];}
                         }
                     }
                 }
                 return newData;
-            }
+            }         
 
             public static TextureData DigCircularHoleSmooth(
     TextureData heightData,
@@ -4389,12 +4392,21 @@ Library.DeleteCustomPrefabs = false;
                 {
                     byte[] fileBytes = File.ReadAllBytes(fullPath);
                     ctx.Response.ContentType = contentType;
-                    ctx.Response.ContentLength64 = fileBytes.Length;
                     ctx.Response.StatusCode = 200;
                     ctx.Response.AddHeader("Access-Control-Allow-Origin", "*");
                     ctx.Response.AddHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
                     ctx.Response.AddHeader("Access-Control-Allow-Headers", "Content-Type");
-                    await ctx.Response.OutputStream.WriteAsync(fileBytes, 0, fileBytes.Length);
+                    ctx.Response.AddHeader("Content-Encoding", "gzip");
+                    using (var ms = new MemoryStream())
+                    {
+                        using (var gzip = new GZipStream(ms, CompressionMode.Compress, true))
+                        {
+                            await gzip.WriteAsync(fileBytes, 0, fileBytes.Length);
+                        }
+                        byte[] compressedBytes = ms.ToArray();
+                        ctx.Response.ContentLength64 = compressedBytes.Length;
+                        await ctx.Response.OutputStream.WriteAsync(compressedBytes, 0, compressedBytes.Length);
+                    }
                     ctx.Response.OutputStream.Close();
                 }
                 catch (Exception ex)
@@ -4406,15 +4418,9 @@ Library.DeleteCustomPrefabs = false;
 
             private static async Task Handle3DMAP(HttpListenerContext ctx, string path)
             {
-                if (path.Equals("/3dmap/data", StringComparison.OrdinalIgnoreCase))
-                {
-                    await ServeTerrainData(ctx);
-                }
-                else
-                {
-                    ctx.Response.StatusCode = 401;
-                    await SafeWrite(ctx.Response, MapViewer, "text/html");
-                }
+                DownloadAndUnzipModels(); //Make sure has the models installed
+                if (path.Equals("/3dmap/data", StringComparison.OrdinalIgnoreCase)){await ServeTerrainData(ctx);}
+                else{await SafeWrite(ctx.Response, MapViewer, "text/html");}
             }
 
             private static async Task ServeTerrainData(HttpListenerContext ctx)
@@ -4425,17 +4431,17 @@ Library.DeleteCustomPrefabs = false;
                 List<Vector3[]> MapRiver = new List<Vector3[]>();
                 List<MapP> Prefabs = new List<MapP>();
                 float worldSize = ConVar.Server.worldsize;
-                if (TerrainMeta.Path?.Roads?.Count > 0){foreach (var r in TerrainMeta.Path.Roads) {if (r.Width > 5){MapRoad.Add(r.Path.Points);}}}
-                if (TerrainMeta.Path?.Rails?.Count > 0){foreach (var r in TerrainMeta.Path.Rails) {MapRail.Add(r.Path.Points);}}
-                if (TerrainMeta.Path?.Rivers?.Count > 0){foreach (var r in TerrainMeta.Path.Rivers) {MapRiver.Add(r.Path.Points);}}
+                try{if (TerrainMeta.Path?.Roads?.Count > 0) { foreach (var r in TerrainMeta.Path.Roads) { if (r.Width > 5) { MapRoad.Add(r.Path.Points); } } }}catch { }
+                try{if (TerrainMeta.Path?.Rails?.Count > 0) { foreach (var r in TerrainMeta.Path.Rails) { MapRail.Add(r.Path.Points); } }}catch { }
+                try{if (TerrainMeta.Path?.Rivers?.Count > 0) { foreach (var r in TerrainMeta.Path.Rivers) { MapRiver.Add(r.Path.Points); } }}catch { }
                 if (World.Serialization?.world?.prefabs?.Count > 0)
                 {
-                    foreach (var pd in World.Serialization.world.prefabs)
+                    foreach (var pd in World.Serialization.world.prefabs.ToArray())
                     {
                         try
                         {
                             string name = StringPool.Get(pd.id);
-                            if(name.Contains("rock_formation_e") || name.Contains("rock_formation_a"))
+                            if (name.Contains("rock_formation_e") || name.Contains("rock_formation_a"))
                             {
                                 Prefabs.Add(new MapP() { Name = "godrock", Postion = pd.position, Rotation = pd.rotation, Scale = pd.scale });
                                 continue;
@@ -4450,11 +4456,17 @@ Library.DeleteCustomPrefabs = false;
                                 Prefabs.Add(new MapP() { Name = pd.category, Postion = pd.position, Rotation = pd.rotation, Scale = pd.scale });
                                 continue;
                             }
-                            else if (name.Contains("monument") || name.Contains("platform"))
+
+                            else if (name.Contains("monument") || name.Contains("unique_environment") || name.Contains("tunnel-entrance") || name.Contains("platform") || name.Contains("power substations") || name.Contains("iceberg") || name.Contains("ice_lakes"))
                             {
                                 Vector3 postion = pd.position;
-                                if(postion.y < 500 && !name.Contains("lab")){postion.y = 500;}
+                                if (postion.y <= -499) { postion.y = 0; }
                                 name = Path.GetFileNameWithoutExtension(name);
+                                if (name.Contains("desert_military_base")) { name = "desert_military_base"; }
+                                else if (name.Contains("mining_quarry")) { name = "mining_quarry"; }
+                                else if (name.Contains("powerlineplatform")) { name = "powerlineplatform"; }
+                                else if (name.Contains("entrance_bunker")) { name = "entrance_bunker"; }
+                                else if (name.Contains("underwater_lab")) { name = "underwater_lab"; }
                                 Prefabs.Add(new MapP() { Name = name, Postion = pd.position, Rotation = pd.rotation, Scale = pd.scale });
                             }
                         }
@@ -4489,11 +4501,21 @@ Library.DeleteCustomPrefabs = false;
                     river = MapRiver,
 
                 };
-
-                var json = JsonConvert.SerializeObject(terrainData);
-                var bytes = Encoding.UTF8.GetBytes(json);
-                await SafeWrite(ctx.Response, bytes, "application/json");
-            }        
+                ctx.Response.Headers["Content-Encoding"] = "gzip";
+                using (var ms = new MemoryStream())
+                {
+                    using (var compressionStream = new GZipStream(ms, System.IO.Compression.CompressionLevel.Fastest, true))
+                    using (var writer = new StreamWriter(compressionStream, new UTF8Encoding(false)))
+                    {
+                        var settings = new JsonSerializerSettings{ReferenceLoopHandling = ReferenceLoopHandling.Ignore,ContractResolver = new Newtonsoft.Json.Serialization.DefaultContractResolver()};
+                        var serializer = JsonSerializer.Create(settings);
+                        serializer.Serialize(writer, terrainData);
+                        writer.Flush();
+                    }
+                    byte[] compressedBytes = ms.ToArray();
+                    await SafeWrite(ctx.Response, compressedBytes, "application/json");
+                }
+            }
 
             private static async Task HandleFavIco(HttpListenerContext ctx) { await SafeWrite(ctx.Response, favico, "image/x-icon"); }
 
@@ -5422,6 +5444,26 @@ Library.DeleteCustomPrefabs = false;
                             result.SetPixel(x, h - 1 - y, src.GetPixel(x, y));
                 }
                 return result;
+            }
+
+            public static void DownloadAndUnzipModels()
+            {
+                if (Directory.Exists("Models")) { return; }
+                string url = "https://github.com/bmgjet/MapGenny/raw/refs/heads/main/Models.zip";
+                string rootPath = AppDomain.CurrentDomain.BaseDirectory;
+                string zipPath = Path.Combine(rootPath, "Models.zip");
+                using (WebClient client = new WebClient())
+                {
+                    try
+                    {
+                        Console.WriteLine("Downloading Models...");
+                        client.DownloadFile(url, zipPath);
+                        Console.WriteLine("Extracting Models...");
+                        ZipFile.ExtractToDirectory(zipPath, rootPath);
+                        File.Delete(zipPath);
+                    }
+                    catch (Exception ex){Console.WriteLine("Error: " + ex.Message);}
+                }
             }
 
             public static void ConvertPNG2HeightMap(ref NativeArray<short> HeightData)
@@ -7829,1277 +7871,1452 @@ form.addEventListener('submit',e=>{
     public static string MapViewer = @"
 <!DOCTYPE html>
 <html lang=""en"">
-<head>
+  <head>
     <meta charset=""UTF-8"">
     <meta name=""viewport"" content=""width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"">
     <meta name=""apple-mobile-web-app-capable"" content=""yes"">
     <meta name=""apple-mobile-web-app-status-bar-style"" content=""black-translucent"">
     <title>3D Map</title>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body {
-            overflow: hidden;
-            font-family: 'Segoe UI', Arial, sans-serif;
-            background: #1a1a2e;
-            touch-action: none;
-            position: fixed;
-            width: 100%;
-            height: 100%;
-        }
-        #canvas-container { width: 100vw; height: 100vh; height: 100dvh; }
-        #loading {
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
-            z-index: 1000; transition: opacity 0.5s ease;
-        }
-        #loading.hidden { opacity: 0; pointer-events: none; }
-        .loader {
-            width: 60px; height: 60px; border: 4px solid rgba(255,255,255,0.1);
-            border-top-color: #00d9ff; border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        #loading-text { color: #00d9ff; margin-top: 20px; font-size: 18px; letter-spacing: 2px; }
-        #debug-info {
-            position: fixed; top: 1px; left: 1px; background: rgba(0,0,0,0.85);
-            padding: 15px; border-radius: 10px; color: #00ff00; font-size: 12px;
-            font-family: monospace; max-width: 500px; max-height: 300px; overflow-y: auto; z-index: 1001;
-        }
-        #debug-info .error { color: #ff4444; }
-        #debug-info .success { color: #44ff44; }
-        #debug-info .info { color: #ffff00; }
-        #controls {
-            position: fixed; bottom: 1px; left: 1px; background: rgba(0,0,0,0.7);
-            padding: 15px 20px; border-radius: 10px; color: #fff; font-size: 13px;
-            backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
-        }
-        #controls h3 { color: #00d9ff; margin-bottom: 10px; font-size: 14px; }
-        #controls p { margin: 5px 0; opacity: 0.8; }
-        #controls span { color: #00d9ff; font-weight: bold; }
-        #info {
-            position: fixed; top: 1px; right: 1px; background: rgba(0,0,0,0.7);
-            padding: 15px 20px; border-radius: 10px; color: #fff; font-size: 13px;
-            backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
-        }
-        #info .coord { color: #00d9ff; font-family: monospace; }
-        #layer-toggle {
-            position: fixed; top: 1px; left: 50%; transform: translateX(-50%);
-            background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px;
-            backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
-            display: flex; gap: 15px; z-index: 1001;
-        }
-        #layer-toggle label { color: #fff; cursor: pointer; display: flex; align-items: center; gap: 5px; }
-        #layer-toggle input[type=""checkbox""] { accent-color: #00d9ff; }
-        #joystick-container {
-            position: fixed;
-            bottom: 30px;
-            left: 30px;
-            width: 120px;
-            height: 120px;
-            background: rgba(0, 0, 0, 0.5);
-            border-radius: 50%;
-            border: 3px solid rgba(0, 217, 255, 0.5);
-            touch-action: none;
-            z-index: 1002;
-            display: none;
-        }
-        #joystick-knob {
-            position: absolute;
-            width: 50px;
-            height: 50px;
-            background: rgba(0, 217, 255, 0.8);
-            border-radius: 50%;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            box-shadow: 0 0 15px rgba(0, 217, 255, 0.5);
-        }
-        #joystick-knob::after {
-            content: '';
-            position: absolute;
-            width: 20px;
-            height: 20px;
-            background: rgba(255, 255, 255, 0.6);
-            border-radius: 50%;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-        }
-        #look-area {
-            position: fixed;
-            top: 0;
-            right: 0;
-            width: 50%;
-            height: 100%;
-            touch-action: none;
-            z-index: 1001;
-            display: none;
-        }
-        #speed-btn {
-            position: fixed;
-            bottom: 160px;
-            left: 30px;
-            width: 60px;
-            height: 60px;
-            background: rgba(0, 0, 0, 0.5);
-            border: 3px solid rgba(0, 217, 255, 0.5);
-            border-radius: 50%;
-            color: #00d9ff;
-            font-size: 11px;
-            font-weight: bold;
-            cursor: pointer;
-            z-index: 1002;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            touch-action: none;
-        }
-        #speed-btn.active {
-            background: rgba(0, 217, 255, 0.5);
-            border-color: #00d9ff;
-        }
-        @media (hover: hover) and (pointer: fine) {
-            #controls { display: block; }
-        }
-        @media (hover: none), (pointer: coarse) {
-            #controls { display: none !important; }
-            #joystick-container { display: block; }
-            #look-area { display: block; }
-            #speed-btn { display: flex; }
-            #layer-toggle {
-                flex-wrap: wrap;
-                justify-content: center;
-                max-width: 90%;
-                padding: 8px 15px;
-            }
-            #layer-toggle label { font-size: 11px; }
-            #info { font-size: 11px; padding: 10px 15px; }
-        }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+      overflow: hidden;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #1a1a2e;
+      touch-action: none;
+      position: fixed;
+      width: 100%;
+      height: 100%;
+      }
+      #canvas-container { width: 100vw; height: 100vh; height: 100dvh; }
+      #loading {
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      z-index: 1000; transition: opacity 0.5s ease;
+      }
+      #loading.hidden { opacity: 0; pointer-events: none; }
+      .loader {
+      width: 60px; height: 60px; border: 4px solid rgba(255,255,255,0.1);
+      border-top-color: #00d9ff; border-radius: 50%;
+      animation: spin 1s linear infinite;
+      }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      #loading-text { color: #00d9ff; margin-top: 20px; font-size: 18px; letter-spacing: 2px; }
+      #debug-info {
+      position: fixed; top: 1px; left: 1px; background: rgba(0,0,0,0.85);
+      padding: 15px; border-radius: 10px; color: #00ff00; font-size: 12px;
+      font-family: monospace; max-width: 500px; max-height: 300px; overflow-y: auto; z-index: 1001;
+      }
+      #debug-info .error { color: #ff4444; }
+      #debug-info .success { color: #44ff44; }
+      #debug-info .info { color: #ffff00; }
+      #controls {
+      position: fixed; bottom: 1px; left: 1px; background: rgba(0,0,0,0.7);
+      padding: 5px 10px; border-radius: 5px; color: #fff; font-size: 8px;
+      backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
+      }
+      #controls h3 { color: #00d9ff; margin-bottom: 10px; font-size: 8px; }
+      #controls p { margin: 5px 0; opacity: 0.8; }
+      #controls span { color: #00d9ff; font-weight: bold; }
+      #info {
+      position: fixed; top: 1px; right: 1px; background: rgba(0,0,0,0.7);
+      padding: 5px 10px; border-radius: 6px; color: #fff; font-size: 10px;
+      backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
+      }
+      #info .coord { color: #00d9ff; font-family: monospace; }
+      #layer-toggle {
+      position: fixed; top: 1px; left: 50%; transform: translateX(-50%);
+      background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 10px;
+      backdrop-filter: blur(10px); border: 1px solid rgba(0,217,255,0.3);
+      display: flex; gap: 15px; z-index: 1001;
+      }
+      #layer-toggle label { font-size: 8px; color: #fff; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+      #layer-toggle input[type=""checkbox""] { accent-color: #00d9ff; }
+      #joystick-container {
+      position: fixed;
+      bottom: 10px;
+      left: 10px;
+      width: 120px;
+      height: 120px;
+      background: rgba(0, 0, 0, 0.5);
+      border-radius: 50%;
+      border: 3px solid rgba(0, 217, 255, 0.5);
+      touch-action: none;
+      z-index: 1002;
+      display: none;
+      }
+      #joystick-knob {
+      position: absolute;
+      width: 50px;
+      height: 50px;
+      background: rgba(0, 217, 255, 0.8);
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 15px rgba(0, 217, 255, 0.5);
+      }
+      #joystick-knob::after {
+      content: '';
+      position: absolute;
+      width: 20px;
+      height: 20px;
+      background: rgba(255, 255, 255, 0.6);
+      border-radius: 50%;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      }
+      #look-area {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 50%;
+      height: 100%;
+      touch-action: none;
+      z-index: 1001;
+      display: none;
+      }
+      #speed-btn {
+      position: fixed;
+      bottom: 160px;
+      left: 10px;
+      width: 60px;
+      height: 60px;
+      background: rgba(0, 0, 0, 0.5);
+      border: 3px solid rgba(0, 217, 255, 0.5);
+      border-radius: 50%;
+      color: #00d9ff;
+      font-size: 11px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 1002;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      touch-action: none;
+      }
+      #speed-btn.active {
+      background: rgba(0, 217, 255, 0.5);
+      border-color: #00d9ff;
+      }
+      #noclip-btn {
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      width: 60px;
+      height: 30px;
+      background: rgba(0, 100, 0, 0.7);
+      border: 2px solid #00ff00;
+      border-radius: 8px;
+      color: #00ff00;
+      font-size: 12px;
+      font-weight: bold;
+      cursor: pointer;
+      z-index: 1003;
+      transition: all 0.2s ease;
+      }
+      #noclip-btn:hover {
+      background: rgba(0, 150, 0, 0.8);
+      box-shadow: 0 0 10px rgba(0, 255, 0, 0.5);
+      }
+      #noclip-btn.active {
+      background: rgba(255, 0, 0, 0.6);
+      color: #fff;
+      border-color: #ff4444;
+      box-shadow: 0 0 10px rgba(255, 68, 68, 0.5);
+      }
+      @media (hover: hover) and (pointer: fine) {
+      #controls { display: block; }
+      }
+      @media (hover: none), (pointer: coarse) {
+      #controls { display: none !important; }
+      #joystick-container { display: block; }
+      #look-area { display: block; }
+      #speed-btn { display: flex; }
+      #noclip-btn { display: none; }
+      #layer-toggle {
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 90%;
+      padding: 8px 15px;
+      }
+      #layer-toggle label { font-size: 11px; }
+      #info { font-size: 11px; padding: 10px 15px; }
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div id=""loading"">
-        <div class=""loader""></div>
-        <div id=""loading-text"">Loading Terrain...</div>
+      <div class=""loader""></div>
+      <div id=""loading-text"">Loading Terrain...</div>
     </div>
     <div id=""debug-info""></div>
     <div id=""canvas-container""></div>
-    <!-- Mobile Controls -->
-    <div id=""joystick-container""><div id=""joystick-knob""></div></div>
+    <div id=""joystick-container"">
+      <div id=""joystick-knob""></div>
+    </div>
     <div id=""look-area""></div>
     <button id=""speed-btn"">FAST</button>
+    <button id=""noclip-btn"">No Clip</button>
     <div id=""layer-toggle"">
-        <label><input type=""checkbox"" id=""showDebug"" > Debug</label>
-        <label><input type=""checkbox"" id=""showRoads"" checked> Roads</label>
-        <label><input type=""checkbox"" id=""showRails"" checked> Rails</label>
-        <label><input type=""checkbox"" id=""showPrefabs"" checked> Prefabs</label>
-        <label><input type=""checkbox"" id=""showWater"" checked> Water</label>
-        <label><input type=""checkbox"" id=""showBB"" checked> Building Block</label>
+      <label><input type=""checkbox"" id=""showDebug"" > Debug</label>
+      <label><input type=""checkbox"" id=""showRoads"" checked> Roads</label>
+      <label><input type=""checkbox"" id=""showRails"" checked> Rails</label>
+      <label><input type=""checkbox"" id=""showPrefabs"" checked> Prefabs</label>
+      <label><input type=""checkbox"" id=""showWater"" checked> Water</label>
+      <label><input type=""checkbox"" id=""showBB"" checked> PreventBuilding</label>
     </div>
     <div id=""controls"">
-        <h3>Navigation Controls</h3>
-        <p><span>W/A/S/D</span> - Move Forward/Left/Back/Right</p>
-        <p><span>Mouse</span> - Look Around</p>
-        <p><span>Shift</span> - Move Fast</p>
-        <p><span>ESC</span> - Release Pointer Lock</p>
+      <h3>Navigation Controls</h3>
+      <p><span>W/A/S/D</span> - Move Forward/Left/Back/Right</p>
+      <p><span>Mouse</span> - Look Around</p>
+      <p><span>Shift</span> - Move Fast</p>
+      <p><span>ESC</span> - Release Pointer Lock</p>
     </div>
     <div id=""info"">
-        <p>Position: <span class=""coord"" id=""pos-display"">0, 0, 0</span></p>
-        <p>Rotation: <span class=""coord"" id=""rot-display"">0°, 0°, 0° </span></p>
+      <p>Position: <span class=""coord"" id=""pos-display"">0, 0, 0</span></p>
+      <p>Rotation: <span class=""coord"" id=""rot-display"">0°, 0°, 0° </span></p>
     </div>
     <script src=""https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js""></script>
     <script src=""https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js""></script>
     <script>
-        let scene, camera, renderer, terrain;
-        let gltfLoader = null;
-        const loadedGLBModels = {};
-        const prefabOffsetCache = {};
-        let roadLines = [];
-        let riverLines = [];
-        let railLines = [];
-        let showDebug = false;
-        let prefabMarkers = [];
-        let BBMarkers = [];
-        let isPointerLocked = false;
-        let moveSpeed = 50;
-        let lookSpeed = 0.002;
-        const keys = { w: false, a: false, s: false, d: false, shift: false };
-        const euler = new THREE.Euler(0, 0, 0, 'YXZ');
-        let TERRAIN_SIZE = 1000;
-        let HEIGHT_SCALE = 1;
-        let SEGMENTS = 512;
-        window.terrainLoaded = false;
-        let showRoads = true;
-        let showRails = true;
-        let showPrefabs = true;
-        let showWater = true;
-        let showBB = true;
-        let waterMesh = null;
-        const CHECKBOX_STATE_KEY = 'mapViewer.layerStates';
-        const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
-        let mobileSpeedMultiplier = 1;
-        let joystickActive = false;
-        let joystickTouchId = null;
-        let joystickStartX = 0;
-        let joystickStartY = 0;
-        let joystickDeltaX = 0;
-        let joystickDeltaY = 0;
-        let lookTouchId = null;
-        let lastLookX = 0;
-        let lastLookY = 0;
-        const BBMarkerConfig = {
-'launch_site_1': { size: [775, 311, 476], type: 'cube', opacity: 0.2 },
-'water_well_e': { radius: 24, type: 'sphere', opacity: 0.2 },
-'water_well_d': { radius: 24, type: 'sphere', opacity: 0.2 },
-'water_well_c': { radius: 24, type: 'sphere', opacity: 0.2 },
-'water_well_b': { radius: 24, type: 'sphere', opacity: 0.2 },
-'water_well_a': { radius: 24, type: 'sphere', opacity: 0.2 },
-'stables_b': { radius: 85, type: 'sphere', opacity: 0.2 },
-'stables_a': { radius: 85, type: 'sphere', opacity: 0.2 },
-'sphere_tank': { radius: 130, type: 'sphere', opacity: 0.2 },
-'satellite_dish': { radius: 170, type: 'sphere', opacity: 0.2 },
-'mining_quarry_c': { radius: 70, type: 'sphere', opacity: 0.2 },
-'mining_quarry_b': { radius: 70, type: 'sphere', opacity: 0.2 },
-'mining_quarry_a': { radius: 70, type: 'sphere', opacity: 0.2 },
-'warehouse': { radius: 100, type: 'sphere', opacity: 0.2 },
-'supermarket_1': { radius: 120, type: 'sphere', opacity: 0.2 },
-'radtown_1': { radius: 130, type: 'sphere', opacity: 0.2 },
-'gas_station_1': { radius: 120, type: 'sphere', opacity: 0.2 },
-'oilrig_2': { size: [128, 150, 128], type: 'cube', opacity: 0.2 },
-'oilrig_1': { size: [128, 150, 138], type: 'cube', opacity: 0.2 },
-'desert_military_base_d': { radius: 200, type: 'sphere', opacity: 0.2 },
-'desert_military_base_c': { radius: 150, type: 'sphere', opacity: 0.2 },
-'desert_military_base_b': { radius: 150, type: 'sphere', opacity: 0.2 },
-'desert_military_base_a': { radius: 150, type: 'sphere', opacity: 0.2 },
-'radtown_small_3': { size: [250, 64, 250], type: 'cube', opacity: 0.2 },
-'nuclear_missile_silo': { radius: 170, type: 'sphere', opacity: 0.2 },
-'junkyard_1': { radius: 170, type: 'sphere', opacity: 0.2 },
-'compound': { radius: 200, type: 'sphere', opacity: 0.2 },
-'bandit_town': { radius: 150, type: 'sphere', opacity: 0.2 },
-'lighthouse': { radius: 100, type: 'sphere', opacity: 0.2 },
-'water_treatment_plant_1': { size: [350, 165, 450], type: 'cube', opacity: 0.2 },
-'trainyard_1': { size: [400, 128, 400], type: 'cube', opacity: 0.2  },
-'powerplant_1': { radius: 210, type: 'sphere', opacity: 0.2 },
-'military_tunnel_1': { radius: 210, type: 'sphere', opacity: 0.2 },
-'excavator_1': { radius: 220, type: 'sphere', opacity: 0.2 },
-'airfield_1': { size: [512, 85, 384], type: 'cube', opacity: 0.2 },
-'jungle_ziggurat_a': { radius: 80, type: 'sphere', opacity: 0.2 },
-'jungle_ruins_e': { radius: 32, type: 'sphere', opacity: 0.2 },
-'jungle_ruins_d': { radius: 32, type: 'sphere', opacity: 0.2 },
-'jungle_ruins_c': { radius: 32, type: 'sphere', opacity: 0.2 },
-'jungle_ruins_b': { radius: 32, type: 'sphere', opacity: 0.2 },
-'jungle_ruins_a': { radius: 32, type: 'sphere', opacity: 0.2 },
-'harbor_2': { radius: 250, type: 'sphere', opacity: 0.2 },
-'harbor_1': { radius: 250, type: 'sphere', opacity: 0.2 },
-'ferry_terminal_1': { radius: 200, type: 'sphere', opacity: 0.2 },
-'fishing_village_c': { radius: 125, type: 'sphere', opacity: 0.2 },
-'fishing_village_b': { radius: 100, type: 'sphere', opacity: 0.2 },
-'fishing_village_a': { radius: 125, type: 'sphere', opacity: 0.2 },
-'cave_small_medium': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
-'cave_small_hard': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
-'cave_small_easy': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
-'cave_medium_medium': { size: [130, 64, 100], type: 'cube', opacity: 0.2 },
-'cave_medium_hard': { size: [120, 64, 130], type: 'cube', opacity: 0.2 },
-'cave_medium_easy': { size: [100, 64, 80], type: 'cube', opacity: 0.2 },
-'cave_large_sewers_hard': { size: [120, 64, 120], type: 'cube', opacity: 0.2 },
-'cave_large_medium': { size: [100, 64, 130], type: 'cube', opacity: 0.2 },
-'cave_large_hard': { size: [150, 64, 180], type: 'cube', opacity: 0.2 },
-'arctic_research_base_a': { radius: 140, type: 'sphere', opacity: 0.2 },
-        };
-        function isBBMarkerType(prefabName) {return BBMarkerConfig.hasOwnProperty(prefabName);}
-        function getBBConfig(label) {return BBMarkerConfig[label] || null;}
-        function createBBSphereMarker(x, y, z, radius, label, opacity = 0.4) {
-            const geometry = new THREE.SphereGeometry(radius, 32, 32);
-            const material = new THREE.MeshBasicMaterial({
-                color: 0xff0000,
-                transparent: true,
-                opacity: opacity,
-                side: THREE.DoubleSide,
-                depthWrite: false
-            });
-            const sphere = new THREE.Mesh(geometry, material);
-            sphere.position.set(x, y, z);
-            sphere.renderOrder = 10;
-            scene.add(sphere);
-            BBMarkers.push(sphere);
-            return sphere;
-        }
-        function createBBCubeMarker(x, y, z, sizeX, sizeY, sizeZ, rotX, rotY, rotZ, label, opacity = 0.35) {
-            const geometry = new THREE.BoxGeometry(sizeX, sizeY, sizeZ);
-            const material = new THREE.MeshBasicMaterial({
-                color: 0xff0000,
-                transparent: true,
-                opacity: opacity,
-                side: THREE.DoubleSide,
-                depthWrite: false
-            });
-            const cube = new THREE.Mesh(geometry, material);
-            cube.position.set(x, y, z);
-            const euler = new THREE.Euler(
-                THREE.MathUtils.degToRad(-rotX),
-                THREE.MathUtils.degToRad(-rotY),
-                THREE.MathUtils.degToRad(-rotZ),
-                'YXZ'
-            );
-            cube.rotation.copy(euler);
-            cube.renderOrder = 10;
-            scene.add(cube);
-            BBMarkers.push(cube);
-            return cube;
-        }  
-        function createBBMarkerFromPrefab(prefab) {
-            const pos = prefab.position || prefab.Position || prefab.pos || prefab.Postion;
-            if (!pos) {return;}
-            const rot = prefab.rotation || prefab.Rotation || prefab.rot || { x: 0, y: 0, z: 0 };
-            const prefabName = prefab.Name || 'Unknown';
-            const config = getBBConfig(prefabName);
-            if (!config) {return;}
-            const x = pos[0] !== undefined ? pos[0] : (pos.x || 0);
-            const y = pos[1] !== undefined ? pos[1] : (pos.y || 0);
-            const z = pos[2] !== undefined ? -pos[2] : -(pos.z || 0);
-            const rotX = rot[0] !== undefined ? rot[0] : (rot.x || 0);
-            const rotY = rot[1] !== undefined ? rot[1] : (rot.y || 0);
-            const rotZ = rot[2] !== undefined ? rot[2] : (rot.z || 0);
-            switch (config.type) {
-                case 'cube':
-                    let sizeX, sizeY, sizeZ;
-                    if (Array.isArray(config.size)) {
-                        sizeX = config.size[0];
-                        sizeY = config.size[1];
-                        sizeZ = config.size[2];
-                    } else {
-                        const s = config.radius || 50;
-                        sizeX = s;
-                        sizeY = s;
-                        sizeZ = s;
-                    }
-                    createBBCubeMarker(x, y, z, sizeX, sizeY, sizeZ, rotX, rotY, rotZ, prefabName, config.opacity);
-                    break;
-                case 'sphere':
-                default:
-                    createBBSphereMarker(x, y, z, config.radius, prefabName, config.opacity);
-                    break;
-            }
-        }
-        showRoads   = applyCheckboxState('showRoads', true);
-        showRails   = applyCheckboxState('showRails', true);
-        showPrefabs = applyCheckboxState('showPrefabs', true);
-        showWater   = applyCheckboxState('showWater', true);
-        showBB   = applyCheckboxState('showBB', true);
-        showDebug   = applyCheckboxState('showDebug', false);
-        setTimeout(() => {
-            roadLines.forEach(line => line.visible = showRoads);
-            railLines.forEach(line => line.visible = showRails);
-            prefabMarkers.forEach(marker => marker.visible = showPrefabs);
-            BBMarkers.forEach(marker => marker.visible = showBB);
-            if (waterMesh) waterMesh.visible = showWater;
-            riverLines.forEach(line => line.visible = showWater);
-        }, 1000);
-        function setupMobileControls() {
-            if (!isMobile) return;
-            function requestFullscreen() {
-                const elem = document.documentElement;
-                if (elem.requestFullscreen) {
-                    elem.requestFullscreen().catch(() => {});
-                } else if (elem.webkitRequestFullscreen) {
-                    elem.webkitRequestFullscreen();
-                } else if (elem.msRequestFullscreen) {
-                    elem.msRequestFullscreen();
-                }
-            }
-            let fullscreenRequested = false;
-            function tryFullscreen() {
-                if (!fullscreenRequested) {
-                    fullscreenRequested = true;
-                    requestFullscreen();
-                }
-            }
-            document.addEventListener('touchstart', tryFullscreen, { once: true, passive: true });
-            const joystickContainer = document.getElementById('joystick-container');
-            const joystickKnob = document.getElementById('joystick-knob');
-            const lookArea = document.getElementById('look-area');
-            const speedBtn = document.getElementById('speed-btn');
-            joystickContainer.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                if (joystickTouchId !== null) return;
-                const touch = e.changedTouches[0];
-                joystickTouchId = touch.identifier;
-                const rect = joystickContainer.getBoundingClientRect();
-                joystickStartX = rect.left + rect.width / 2;
-                joystickStartY = rect.top + rect.height / 2;
-                joystickActive = true;
-            }, { passive: false });
-            joystickContainer.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                for (const touch of e.changedTouches) {
-                    if (touch.identifier === joystickTouchId) {
-                        const dx = touch.clientX - joystickStartX;
-                        const dy = touch.clientY - joystickStartY;
-                        const maxDist = 40;
-                        const dist = Math.sqrt(dx * dx + dy * dy);
-                        const clampedDist = Math.min(dist, maxDist);
-                        const angle = Math.atan2(dy, dx);
-                        const clampedX = Math.cos(angle) * clampedDist;
-                        const clampedY = Math.sin(angle) * clampedDist;
-                        joystickKnob.style.transform = `translate(calc(-50% + ${clampedX}px), calc(-50% + ${clampedY}px))`;
-                        joystickDeltaX = clampedX / maxDist;
-                        joystickDeltaY = clampedY / maxDist;
-                    }
-                }
-            }, { passive: false });
-            joystickContainer.addEventListener('touchend', (e) => {
-                for (const touch of e.changedTouches) {
-                    if (touch.identifier === joystickTouchId) {
-                        joystickTouchId = null;
-                        joystickActive = false;
-                        joystickKnob.style.transform = 'translate(-50%, -50%)';
-                        joystickDeltaX = 0;
-                        joystickDeltaY = 0;
-                    }
-                }
-            });
-            joystickContainer.addEventListener('touchcancel', (e) => {
-                joystickTouchId = null;
-                joystickActive = false;
-                joystickKnob.style.transform = 'translate(-50%, -50%)';
-                joystickDeltaX = 0;
-                joystickDeltaY = 0;
-            });
-            lookArea.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                if (lookTouchId !== null) return;
-                const touch = e.changedTouches[0];
-                lookTouchId = touch.identifier;
-                lastLookX = touch.clientX;
-                lastLookY = touch.clientY;
-            }, { passive: false });
-            lookArea.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                for (const touch of e.changedTouches) {
-                    if (touch.identifier === lookTouchId) {
-                        const dx = touch.clientX - lastLookX;
-                        const dy = touch.clientY - lastLookY;
-                        lastLookX = touch.clientX;
-                        lastLookY = touch.clientY;
-                        euler.setFromQuaternion(camera.quaternion);
-                        euler.y -= dx * lookSpeed * 2;
-                        euler.x -= dy * lookSpeed * 2;
-                        euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
-                        camera.quaternion.setFromEuler(euler);
-                    }
-                }
-            }, { passive: false });
-            lookArea.addEventListener('touchend', (e) => {
-                for (const touch of e.changedTouches) {
-                    if (touch.identifier === lookTouchId) {
-                        lookTouchId = null;
-                    }
-                }
-            });
-            lookArea.addEventListener('touchcancel', (e) => {lookTouchId = null;});
-            speedBtn.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                mobileSpeedMultiplier = mobileSpeedMultiplier === 1 ? 6 : 1;
-                speedBtn.classList.toggle('active', mobileSpeedMultiplier > 1);
-            }, { passive: false });
-            speedBtn.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                mobileSpeedMultiplier = mobileSpeedMultiplier === 1 ? 6 : 1;
-                speedBtn.classList.toggle('active', mobileSpeedMultiplier > 1);
-            });
-            document.getElementById('canvas-container').addEventListener('touchstart', (e) => {
-                if (e.target.id === 'canvas-container' && lookTouchId === null) {
-                    const touch = e.changedTouches[0];
-                    const rect = joystickContainer.getBoundingClientRect();
-                    const isInJoystick = touch.clientX < rect.right + 20 && touch.clientY > rect.top - 20;
-                    if (!isInJoystick) {
-                        lookTouchId = touch.identifier;
-                        lastLookX = touch.clientX;
-                        lastLookY = touch.clientY;
-                    }
-                }
-            }, { passive: false });
-            document.getElementById('canvas-container').addEventListener('touchmove', (e) => {
-                for (const touch of e.changedTouches) {
-                    if (touch.identifier === lookTouchId) {
-                        const dx = touch.clientX - lastLookX;
-                        const dy = touch.clientY - lastLookY;
-                        lastLookX = touch.clientX;
-                        lastLookY = touch.clientY;
-                        euler.setFromQuaternion(camera.quaternion);
-                        euler.y -= dx * lookSpeed * 2;
-                        euler.x -= dy * lookSpeed * 2;
-                        euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
-                        camera.quaternion.setFromEuler(euler);
-                    }
-                }
-            }, { passive: false });
-            document.getElementById('canvas-container').addEventListener('touchend', (e) => {
-                for (const touch of e.changedTouches) {
-                    if (touch.identifier === lookTouchId) {
-                        lookTouchId = null;
-                    }
-                }
-            });
-        }
-function onLayerChange(id, callback) {
-    document.getElementById(id).addEventListener('change', (e) => {
-        const state = loadLayerState();
-        state[id] = e.target.checked;
-        saveLayerState(state);
-        callback(e.target.checked);
-    });
-}
-onLayerChange('showRoads', (v) => {
-    showRoads = v;
-    roadLines.forEach(l => l.visible = v);
-});
-onLayerChange('showRails', (v) => {
-    showRails = v;
-    railLines.forEach(l => l.visible = v);
-});
-onLayerChange('showPrefabs', (v) => {
-    showPrefabs = v;
-    prefabMarkers.forEach(m => m.visible = v);
-});
-onLayerChange('showBB', (v) => {
-    showBB = v;
-    BBMarkers.forEach(m => m.visible = v);
-});
-onLayerChange('showWater', (v) => {
-    showWater = v;
-    if (waterMesh) waterMesh.visible = v;
-    riverLines.forEach(l => l.visible = v);
-});
-onLayerChange('showDebug', (v) => {showDebug = v;});
-function loadLayerState() {
-    try {
-        return JSON.parse(localStorage.getItem(CHECKBOX_STATE_KEY)) || {};
-    } catch {return {};}
-}
-function saveLayerState(state) {localStorage.setItem(CHECKBOX_STATE_KEY, JSON.stringify(state));}
-function applyCheckboxState(id, defaultValue) {
-    const saved = loadLayerState();
-    const checkbox = document.getElementById(id);
-    const value = saved[id] !== undefined ? saved[id] : defaultValue;
-    checkbox.checked = value;
-    return value;
-}
-        function log(message, type = 'success') {
-            if(showDebug)
-            {
-            console.log(message);
-            const debugEl = document.getElementById('debug-info');
-            const className = type === 'error' ? 'error' : type === 'info' ? 'info' : 'success';
-            debugEl.innerHTML += `<div class=""${className}"">${new Date().toLocaleTimeString()} - ${message}</div>`;
-            debugEl.scrollTop = debugEl.scrollHeight;
-            }
-        }
-        function base64ToInt16Array(base64) {
-            try {
-                const binaryString = atob(base64);
-                const len = binaryString.length;
-                const bytes = new Uint8Array(len);
-                for (let i = 0; i < len; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                return new Int16Array(bytes.buffer);
-            } catch (e) {
-                log(`Base64 decode error: ${e.message}`, 'error');
-                return null;
-            }
-        }
-        function base64ToUint8Array(base64) {
-            try {
-                const binaryString = atob(base64);
-                const len = binaryString.length;
-                const bytes = new Uint8Array(len);
-                for (let i = 0; i < len; i++) {
-                    bytes[i] = binaryString.charCodeAt(i);
-                }
-                return bytes;
-            } catch (e) {
-                log(`Base64 decode error: ${e.message}`, 'error');
-                return null;
-            }
-        }
-        async function decompressGzipBase64(base64) {
-            try {
-                const binaryString = atob(base64);
-                const len = binaryString.length;
-                const bytes = new Uint8Array(len);
-                for (let i = 0; i < len; i++) {bytes[i] = binaryString.charCodeAt(i);}
-                const ds = new DecompressionStream('gzip');
-                const decompressedStream = new Response(bytes).body.pipeThrough(ds);
-                const resultBuffer = await new Response(decompressedStream).arrayBuffer();
-                return resultBuffer;
-            } catch (e) {return null;}
-        }
-        async function decompressHeightmap(base64) {
-            const buffer = await decompressGzipBase64(base64);
-            if (!buffer) return null;
-            return new Int16Array(buffer);
-        }
-        async function decompressData(base64) {
-            const buffer = await decompressGzipBase64(base64);
-            if (!buffer) return null;
-            return new Uint8Array(buffer);
-        }
-function downsampleHeightmap(data, srcRes, dstRes) {
-    const result = new Float32Array(dstRes * dstRes);
-    const ratio = (srcRes - 1) / (dstRes - 1);
-    const WATER_LEVEL_SHORT = 16336;
-    const MAX_DEVIATION_SHORT = 16336;
-    const MAX_DEVIATION_METERS = 500;
-    for (let y = 0; y < dstRes; y++) {
-        for (let x = 0; x < dstRes; x++) {
-            const srcX = x * ratio;
-            const srcY = y * ratio;
-            const x0 = Math.floor(srcX);
-            const y0 = Math.floor(srcY);
-            const x1 = Math.min(x0 + 1, srcRes - 1);
-            const y1 = Math.min(y0 + 1, srcRes - 1);
-            const fx = srcX - x0;
-            const fy = srcY - y0;
-            const h00 = data[y0 * srcRes + x0];
-            const h10 = data[y0 * srcRes + x1];
-            const h01 = data[y1 * srcRes + x0];
-            const h11 = data[y1 * srcRes + x1];
-            const rawHeight =
-                (1 - fx) * (1 - fy) * h00 +
-                fx * (1 - fy) * h10 +
-                (1 - fx) * fy * h01 +
-                fx * fy * h11;
-            result[y * dstRes + x] = (rawHeight - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
-        }
-    }
-    log(`Heights converted to world units`);
-    return result;
-}
-        async function init() {
-            scene = new THREE.Scene();
-            scene.background = new THREE.Color(0x87CEEB);
-            scene.fog = new THREE.Fog(0x87CEEB, 1000, 4000);
-            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 9999);
-            camera.position.set(0, 300, 0);
-            camera.lookAt(0, 0, -1);
-            renderer = new THREE.WebGLRenderer({ antialias: true });
-            renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.setPixelRatio(window.devicePixelRatio);
-            document.getElementById('canvas-container').appendChild(renderer.domElement);
-            const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-            scene.add(ambientLight);
-            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-            directionalLight.position.set(100, 200, 100);
-            scene.add(directionalLight);
-            await loadTerrain();
-            const fogNear = TERRAIN_SIZE * 0.2;
-            const fogFar = TERRAIN_SIZE * 0.6;
-            scene.fog = new THREE.Fog(0x87CEEB, fogNear, fogFar);
-            camera.position.y = Math.max(300, TERRAIN_SIZE * 0.15);
-            setupControls();
-            setupMobileControls();
-            setTimeout(() => {document.getElementById('loading').classList.add('hidden');}, 1000);
-            animate();
-        }
-        async function loadTerrain() {
-            try {
-                const response = await fetch('/3dmap/data');
-                if (!response.ok) {throw new Error(`HTTP ${response.status}: ${response.statusText}`);}
-                const terrainData = await response.json();
-                log(`Received: worldSize=${terrainData.worldSize}, heightMapRes=${terrainData.heightMapResolution}`, 'info');
-                TERRAIN_SIZE = terrainData.worldSize || 1000;
-                SEGMENTS = terrainData.heightMapResolution || 512;
-                if(SEGMENTS < 512) SEGMENTS = 512;
-                HEIGHT_SCALE = 1.0;
-                let rawHeights = await decompressHeightmap(terrainData.heightmap);
-                if (!rawHeights) {
-                rawHeights = base64ToInt16Array(terrainData.heightmap);
-                window.terrainLoaded = true;
-                TERRAIN_SIZE = 1000
-                createDemoTerrain();
-                return;
-                }
-                if (!rawHeights) throw new Error('Failed to decode heightmap');
-                log(`Decoded ${rawHeights.length} Int16 height values`);
-                let splatData = await decompressData(terrainData.splatmap);
-                if (!splatData) {splatData = base64ToUint8Array(terrainData.splatmap);}
-                if (splatData) log(`Decoded ${splatData.length} splat values`);
-                const splatRes = terrainData.splatMapResolution || terrainData.heightMapResolution;
-                log(`Splat: ${splatRes}x${splatRes}`);
-                let minH = Infinity, maxH = -Infinity;
-                for (let i = 0; i < rawHeights.length; i++) {
-                    if (rawHeights[i] < minH) minH = rawHeights[i];
-                    if (rawHeights[i] > maxH) maxH = rawHeights[i];
-                }
-                const srcRes = terrainData.heightMapResolution;
-                const dstRes = SEGMENTS + 1;
-                let heights;
-                if (srcRes !== dstRes) {heights = downsampleHeightmap(rawHeights, srcRes, dstRes);
-                } else {
-                    const WATER_LEVEL_SHORT = 16336;
-                    const MAX_DEVIATION_SHORT = 16336;
-                    const MAX_DEVIATION_METERS = 500;
-                    const minWorldH = (minH - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
-                    const maxWorldH = (maxH - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
-                    log(`Converting ${rawHeights.length} heights directly to world units`, 'info');
-                    heights = new Float32Array(rawHeights.length);
-                    for (let i = 0; i < rawHeights.length; i++) {heights[i] = (rawHeights[i] - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;}
-                }
-                window.terrainHeights = heights;
-                window.terrainResolution = dstRes;
-                window.splatData = splatData;
-                window.splatResolution = splatRes;
-                window.terrainLoaded = true;
-                createTerrainMesh(heights, terrainData.splatColors);
-                createWaterMesh();
-                if (terrainData.roads && terrainData.roads.length > 0) {
-                    log(`Drawing ${terrainData.roads.length} roads from server data...`);
-                    drawRoadsFromServer(terrainData.roads);
-                }
-                if (terrainData.rail && terrainData.rail.length > 0) {
-                    log(`Drawing ${terrainData.rail.length} rails from server data...`);
-                    drawRailsFromServer(terrainData.rail);
-                }
-                if (terrainData.prefabs && terrainData.prefabs.length > 0) {
-                    log(`Drawing ${terrainData.prefabs.length} prefabs from server data...`);
-                    drawPrefabs(terrainData.prefabs);
-                }
-                if (terrainData.river && terrainData.river.length > 0) {
-                    log(`Drawing ${terrainData.river.length} river from server data...`);
-                    drawRiverFromServer(terrainData.river);
-                }
-            } catch (error) {
-                log(`Failed to load terrain: ${error.message}`, 'error');
-                log('Creating demo terrain...', 'info');
-                window.terrainLoaded = true;
-                createDemoTerrain();
-            }
-        }
-function createTerrainMesh(heights, splatColors) {
-    const colorMap = {
-        dirt:    splatColors?.dirt    || [0.6, 0.479, 0.33],
-        snow:    splatColors?.snow    || [0.862, 0.929, 0.941],
-        sand:    splatColors?.sand    || [0.7, 0.659, 0.527],
-        rock:    splatColors?.rock    || [0.4, 0.393, 0.375],
-        grass:   splatColors?.grass   || [0.354, 0.37, 0.203],
-        forest:  splatColors?.forest || [0.248, 0.3, 0.07],
-        stones:  splatColors?.stones  || [0.137, 0.278, 0.276],
-        gravel:  splatColors?.gravel || [0.25, 0.243, 0.22]
-    };
-    const channelColors = [
-        colorMap.dirt,
-        colorMap.snow,
-        colorMap.sand,
-        colorMap.rock,
-        colorMap.grass,
-        colorMap.forest,
-        colorMap.stones,
-        colorMap.gravel
-    ];
-    function getSplatChannel(x, y, channel, splatRes) {
-        if (!window.splatData) return 0;
-        const channelOffset = channel * splatRes * splatRes;
-        const index = channelOffset + y * splatRes + x;
-        return index < window.splatData.length ? window.splatData[index] : 0;
-    }
-    const geometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, SEGMENTS, SEGMENTS);
-    const vertices = geometry.attributes.position.array;
-    const colors = new Float32Array(vertices.length);
-    const res = SEGMENTS + 1;
-    const splatRes = window.splatResolution || res;
-    for (let i = 0; i < vertices.length / 3; i++) {
-        const x = i % res;
-        const y = Math.floor(i / res);
-        const flippedY = (res - 1) - y;
-        vertices[i * 3 + 2] = heights[flippedY * res + x] || 0;
-        const sx = Math.floor((x / (res - 1)) * (splatRes - 1));
-        const sy = Math.floor((flippedY / (res - 1)) * (splatRes - 1));
-        let r, g, b;
-            let totalWeight = 0;
-            const weights = [];
-            for (let c = 0; c < 8; c++) {
-                weights.push(getSplatChannel(sx, sy, c, splatRes) / 255.0);
-                totalWeight += weights[c];
-            }
-            if (totalWeight > 0) {
-                r = g = b = 0;
-                for (let c = 0; c < 8; c++) {
-                    const w = weights[c] / totalWeight;
-                    r += channelColors[c][0] * w;
-                    g += channelColors[c][1] * w;
-                    b += channelColors[c][2] * w;
-                }
-            } else {
-                r = colorMap.grass[0];
-                g = colorMap.grass[1];
-                b = colorMap.grass[2];
-            }
-        colors[i * 3] = r;
-        colors[i * 3 + 1] = g;
-        colors[i * 3 + 2] = b;
-    }
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.computeVertexNormals();
-    terrain = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({vertexColors: true}));
-    terrain.rotation.x = -Math.PI / 2;
-    scene.add(terrain);
-    log('Terrain mesh created', 'success');
-}
-function createWaterMesh() {
-    const waterHeight = 0.01;
-    const waterGeo = new THREE.PlaneGeometry(
-        TERRAIN_SIZE,
-        TERRAIN_SIZE,
-        1,
-        1
-    );
-    const waterMat = new THREE.MeshPhongMaterial({
-        color: 0x1a5f7a,
-        transparent: true,
-        opacity: 0.75,
-        shininess: 100,
-        depthWrite: true
-    });
-    waterMesh = new THREE.Mesh(waterGeo, waterMat);
-    waterMesh.rotation.x = -Math.PI / 2;
-    waterMesh.position.y = waterHeight;
-    waterMesh.renderOrder = 1;
-    terrain.renderOrder = 0;
-    scene.add(waterMesh);
-}
-        function getTerrainHeightAt(worldX, worldZ) {
-            if (!window.terrainHeights || !window.terrainResolution) return 0;
-            const res = window.terrainResolution;
-            const halfSize = TERRAIN_SIZE / 2;
-            const percentX = (worldX + halfSize) / TERRAIN_SIZE;
-            const percentZ = (worldZ + halfSize) / TERRAIN_SIZE;
-            const gridX = Math.floor(percentX * (res - 1));
-            const gridZ = Math.floor(percentZ * (res - 1));
-            const flippedGridZ = (res - 1) - gridZ;
-            if (gridX < 0 || gridX >= res || flippedGridZ < 0 || flippedGridZ >= res) {return 0;}
-            return window.terrainHeights[flippedGridZ * res + gridX] || 0;
-        }
-const ROAD_HEIGHT_OFFSET = 0.5;
-const RAIL_HEIGHT_OFFSET = 0.8;
-function drawRoadsFromServer(roadsData) {
-    const ROAD_WIDTH = 8;
-    const ROAD_COLOR = 0x111111;
-    roadsData.forEach((roadPath) => {
-        if (!roadPath || roadPath.length < 2) return;
-        for (let i = 0; i < roadPath.length - 1; i++) {
-            const p1 = roadPath[i];
-            const p2 = roadPath[i+1];
-            const x1 = p1[0] !== undefined ? p1[0] : p1.x;
-            const z1 = p1[2] !== undefined ? -p1[2] : -p1.z;
-            const h1 = (getTerrainHeightAt(x1, z1) * HEIGHT_SCALE) + ROAD_HEIGHT_OFFSET;
-            const x2 = p2[0] !== undefined ? p2[0] : p2.x;
-            const z2 = p2[2] !== undefined ? -p2[2] : -p2.z;
-            const h2 = (getTerrainHeightAt(x2, z2) * HEIGHT_SCALE) + ROAD_HEIGHT_OFFSET;
-            const v1 = new THREE.Vector3(x1, h1, z1);
-            const v2 = new THREE.Vector3(x2, h2, z2);
-            createThickSegment(v1, v2, ROAD_WIDTH, ROAD_COLOR, roadLines);
-        }
-    });
-}
-function drawRiverFromServer(riverData) {
-    log(`Drawing ${riverData.length} River...`);
-    const RIVER_WIDTH = 8;
-    const RIVER_COLOR = 0x87CEEB;
-    riverData.forEach((riverPath) => {
-        if (!riverPath || riverPath.length < 2) return;
-        for (let i = 0; i < riverPath.length - 1; i++) {
-            const p1 = riverPath[i];
-            const p2 = riverPath[i+1];
-            const x1 = p1[0] !== undefined ? p1[0] : p1.x;
-            const z1 = p1[2] !== undefined ? -p1[2] : -p1.z;
-            const h1 = (getTerrainHeightAt(x1, z1) * HEIGHT_SCALE) + ROAD_HEIGHT_OFFSET;
-            const x2 = p2[0] !== undefined ? p2[0] : p2.x;
-            const z2 = p2[2] !== undefined ? -p2[2] : -p2.z;
-            const h2 = (getTerrainHeightAt(x2, z2) * HEIGHT_SCALE) + ROAD_HEIGHT_OFFSET;
-            const v1 = new THREE.Vector3(x1, h1, z1);
-            const v2 = new THREE.Vector3(x2, h2, z2);
-            createThickSegment(v1, v2, RIVER_WIDTH, RIVER_COLOR, riverLines);
-        }
-    });
-}
-function drawRailsFromServer(railsData) {
-    const TRACK_WIDTH = 3;
-    const TRACK_COLOR = 0x3d2b1f;
-    railsData.forEach((railPath) => {
-        if (!railPath || railPath.length < 2) {return;}
-        for (let i = 0; i < railPath.length - 1; i++) {
-            const p1 = railPath[i];
-            const p2 = railPath[i+1];
-            const x1 = p1[0] !== undefined ? p1[0] : p1.x;
-            const z1 = p1[2] !== undefined ? -p1[2] : -p1.z;
-            const h1 = (getTerrainHeightAt(x1, z1) * HEIGHT_SCALE) + RAIL_HEIGHT_OFFSET;
-            const x2 = p2[0] !== undefined ? p2[0] : p2.x;
-            const z2 = p2[2] !== undefined ? -p2[2] : -p2.z;
-            const h2 = (getTerrainHeightAt(x2, z2) * HEIGHT_SCALE) + RAIL_HEIGHT_OFFSET;
-            const v1 = new THREE.Vector3(x1, h1, z1);
-            const v2 = new THREE.Vector3(x2, h2, z2);
-            createThickSegment(v1, v2, TRACK_WIDTH, TRACK_COLOR, railLines);
-        }
-    });
-}
-function createThickSegment(v1, v2, width, color, arrayToPush) {
-    const distance = v1.distanceTo(v2);
-    const geometry = new THREE.BoxGeometry(width, 0.5, distance);
-    const material = new THREE.MeshLambertMaterial({ color: color });
-    const mesh = new THREE.Mesh(geometry, material);
-    mesh.position.set((v1.x + v2.x) / 2, (v1.y + v2.y) / 2, (v1.z + v2.z) / 2);
-    mesh.lookAt(v2);
-    scene.add(mesh);
-    arrayToPush.push(mesh);
-}
-function initGLTFLoader() {if (typeof THREE.GLTFLoader !== 'undefined') {gltfLoader = new THREE.GLTFLoader();} else {log('GLTFLoader not available, will use cube markers', 'error');}}
-function loadGLBModel(url, onLoad, onError) {
-    if (!gltfLoader) {
-    if (onError) onError('GLTFLoader not initialized');
-    return;
-    }
-    gltfLoader.load(
-        url,
-        (gltf) => {if (onLoad) onLoad(gltf);},
-        (progress) => {},
-        (error) => {if (onError) onError(error);}
-    );
-}
-async function loadPrefabOffset(prefabName) {
-    if (prefabOffsetCache[prefabName] !== undefined) {
-        log(`Using cached offset for: ${prefabName}`, 'info');
-        return prefabOffsetCache[prefabName];
-    }
-    const offsetUrl = window.location.origin + '/Models/' + prefabName + '.json';
-    let rawOffsetData = null;
-        try {
-            const response = await fetch(offsetUrl);
-            if (response.ok) {rawOffsetData = await response.json();}
-        } catch (e) {log(`Error fetching ${offsetUrl}: ${e.message}`, 'info');}
-    const normalizeOffsets = (data) => {
-        if (!data) return null;
-        return {
-            positionOffset: {
-                x: data.positionOffset?.x ?? data.localPositionOffset?.x ?? 0,
-                y: data.positionOffset?.y ?? data.localPositionOffset?.y ?? 0,
-                z: data.positionOffset?.z ?? data.localPositionOffset?.z ?? 0
-            },
-            rotationOffset: {
-                x: data.rotationOffset?.x ?? data.localRotationOffset?.x ?? 0,
-                y: data.rotationOffset?.y ?? data.localRotationOffset?.y ?? 0,
-                z: data.rotationOffset?.z ?? data.localRotationOffset?.z ?? 0
-            },
-            scaleMultiplier: {
-                x: data.scaleMultiplier?.x ?? data.localScaleOffset?.x ?? 1,
-                y: data.scaleMultiplier?.y ?? data.localScaleOffset?.y ?? 1,
-                z: data.scaleMultiplier?.z ?? data.localScaleOffset?.z ?? 1
-            }
-        };
-    };
-    if (rawOffsetData) {
-        const normalizedOffsets = normalizeOffsets(rawOffsetData);
-        prefabOffsetCache[prefabName] = normalizedOffsets;
-        return normalizedOffsets;
-    }
-    const defaultOffsets = {
-        positionOffset: { x: 0, y: 0, z: 0 },
-        rotationOffset: { x: 0, y: 0, z: 0 },
-        scaleMultiplier: { x: 1, y: 1, z: 1 }
-    };
-    prefabOffsetCache[prefabName] = defaultOffsets;
-    return defaultOffsets;
-}
-function transformPositionFromUnity(x, y, z) {return new THREE.Vector3(x, y, -z);}
-function transformRotationFromUnity(rotX, rotY, rotZ) {
-    return {
-        x: -rotX,
-        y: -rotY,
-        z: -rotZ
-    };
-}
-function applyTransformWithLocalOffsets(obj, unityX, unityY, unityZ, unityRot, baseScale, offsets) {
-    const normalizedPos = transformPositionFromUnity(unityX || 0, unityY || 0, unityZ || 0);
-    const normalizedRot = transformRotationFromUnity(
-        unityRot?.x || 0,
-        unityRot?.y || 0,
-        unityRot?.z || 0
-    );
-    obj.updateMatrixWorld(true);
-    const glbScale = new THREE.Vector3();
-    const glbQuat = new THREE.Quaternion();
-    const glbPos = new THREE.Vector3();
-    obj.matrixWorld.decompose(glbPos, glbQuat, glbScale);
-    const posOffset = offsets?.positionOffset ?? offsets?.localPositionOffset;
-    const rotOffset = offsets?.rotationOffset ?? offsets?.localRotationOffset;
-    const scaleOff = offsets?.scaleMultiplier ?? offsets?.localScaleOffset;
-    const normalizedQuat = new THREE.Quaternion();
-    const normalizedEuler = new THREE.Euler(
-        THREE.MathUtils.degToRad(normalizedRot.x),
-        THREE.MathUtils.degToRad(normalizedRot.y),
-        THREE.MathUtils.degToRad(normalizedRot.z),
-        'YXZ'
-    );
-    normalizedQuat.setFromEuler(normalizedEuler);
-    let localOffset = new THREE.Vector3(0, 0, 0);
-    if (posOffset) {localOffset.set(posOffset.x || 0, posOffset.y || 0, posOffset.z || 0);}
-    localOffset.applyQuaternion(normalizedQuat);
-    const finalPosition = normalizedPos.clone().add(localOffset);
-    obj.position.copy(finalPosition);
-    let finalQuat = normalizedQuat.clone();
-    if (rotOffset) {
-        const offsetEuler = new THREE.Euler(
-            THREE.MathUtils.degToRad(rotOffset.x || 0),
-            THREE.MathUtils.degToRad(rotOffset.y || 0),
-            THREE.MathUtils.degToRad(rotOffset.z || 0),
-            'YXZ'
-        );
-        const offsetQuat = new THREE.Quaternion().setFromEuler(offsetEuler);
-        finalQuat.multiply(offsetQuat);
-    }
-    obj.quaternion.copy(finalQuat);
-    let scaleX = baseScale?.x || 1;
-    let scaleY = baseScale?.y || 1;
-    let scaleZ = baseScale?.z || 1;
-    if (scaleOff) {
-        scaleX *= (scaleOff.x || 1);
-        scaleY *= (scaleOff.y || 1);
-        scaleZ *= (scaleOff.z || 1);
-    }
-    obj.scale.set(
-        glbScale.x * scaleX,
-        glbScale.y * scaleY,
-        glbScale.z * scaleZ
-    );
-}
-async function processPrefab(prefab, index) {
-    const pos = prefab.position || prefab.Position || prefab.pos || prefab.Postion;
-    if (!pos) {return;}
-    const unityX = pos[0] !== undefined ? pos[0] : (pos.x || 0);
-    const unityY = pos[1] !== undefined ? pos[1] : (pos.y || 0);
-    const unityZ = pos[2] !== undefined ? pos[2] : (pos.z || 0);
-    const rot = prefab.rotation || prefab.Rotation || prefab.rot || { x: 0, y: 0, z: 0 };
-    const unityRot = {
-        x: rot[0] !== undefined ? rot[0] : (rot.x || 0),
-        y: rot[1] !== undefined ? rot[1] : (rot.y || 0),
-        z: rot[2] !== undefined ? rot[2] : (rot.z || 0)
-    };
-    const scaleData = prefab.scale || prefab.Scale || { x: 1, y: 1, z: 1 };
-    const baseScale = {
-        x: scaleData[0] !== undefined ? scaleData[0] : (scaleData.x || 1),
-        y: scaleData[1] !== undefined ? scaleData[1] : (scaleData.y || 1),
-        z: scaleData[2] !== undefined ? scaleData[2] : (scaleData.z || 1)
-    };
-    const prefabName = prefab.Name || 'Unknown';
-    const modelUrl = window.location.origin + '/Models/' + prefabName + '.glb';
-    const offsets = await loadPrefabOffset(prefabName);
-    if (loadedGLBModels[modelUrl]) {
-        const cached = loadedGLBModels[modelUrl];
-        const model = cached.scene.clone();
-        applyTransformWithLocalOffsets(model, unityX, unityY, unityZ, unityRot, baseScale, offsets);
-        scene.add(model);
-        prefabMarkers.push(model);
-        addPrefabLabel(prefabName, model.position.x, model.position.y, model.position.z);
-        return;
-    }
-    loadGLBModel(
-        modelUrl,
-        (gltf) => {
-            const model = gltf.scene;
-            const box = new THREE.Box3().setFromObject(model);
-            const modelHeight = box.max.y - box.min.y;
-            const bottomOffset = -box.min.y;
-            loadedGLBModels[modelUrl] = {scene: model,bottomOffset: bottomOffset};
-            const clonedModel = model.clone();
-            applyTransformWithLocalOffsets(clonedModel, unityX, unityY, unityZ, unityRot, baseScale, offsets);
-            scene.add(clonedModel);
-            prefabMarkers.push(clonedModel);
-            addPrefabLabel(prefabName, clonedModel.position.x, clonedModel.position.y, clonedModel.position.z);
-            log(`Loaded GLB: ${prefabName}`, 'success');
-        },
-        (err) => {
-            const markerPos = transformPositionFromUnity(unityX, unityY, unityZ);
-            createCubeMarker(prefabName, markerPos.x, markerPos.y, markerPos.z);
-        }
-    );
-}
-function addPrefabLabel(name, x, y, z, modelHeight = 10) {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    canvas.width = 512; canvas.height = 128;
-    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(0, 0, 512, 128);
-    ctx.fillStyle = '#00ff00';
-    ctx.font = 'bold 32px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText(name, 256, 64);
-    const texture = new THREE.CanvasTexture(canvas);
-    const spriteMat = new THREE.SpriteMaterial({
-        map: texture,
-        depthTest: false,
-        sizeAttenuation: true
-    });
-    const sprite = new THREE.Sprite(spriteMat);
-    sprite.position.set(x, y + modelHeight + 5, z);
-    sprite.scale.set(80, 20, 1);
-    scene.add(sprite);
-    prefabMarkers.push(sprite);
-}
-function createCubeMarker(name, x, y, z) {
-    const markerGeo = new THREE.BoxGeometry(5, 5, 5);
-    const markerMat = new THREE.MeshBasicMaterial({ color: 0xff6600, opacity: 0.9, transparent: true });
-    const marker = new THREE.Mesh(markerGeo, markerMat);
-    marker.position.set(x, y, z);
-    scene.add(marker);
-    prefabMarkers.push(marker);
-    addPrefabLabel(name, x, y, z);
-}
-async function drawPrefabs(prefabsData) {
-    if (!prefabsData || prefabsData.length === 0) return;
-    initGLTFLoader();
-    const maxPrefabs = Math.min(prefabsData.length, 100);
-    let bbMarkerCount = 0;
-    for (let i = 0; i < maxPrefabs; i++) {
-        const prefab = prefabsData[i];
-        const prefabName = prefab.Name || 'Unknown';
-        if (isBBMarkerType(prefabName)) {
-            createBBMarkerFromPrefab(prefab);
-            bbMarkerCount++;
-        } 
-            processPrefab(prefab, i);
-    }
-    if (bbMarkerCount > 0) {
-        log(`Created ${bbMarkerCount} BB markers from prefabs`, 'info');
-    }
-    if (prefabsData.length > 150) {log(`Showing ${maxPrefabs} of ${prefabsData.length} prefabs (limited for performance)`, 'info');}
-    log(`Processing ${maxPrefabs} prefabs...`, 'success');
-}
-function createDemoTerrain() {
-    log('Generating BMGJET Demo');
-    const res = SEGMENTS + 1;
-    const geometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, SEGMENTS, SEGMENTS);
-    const vertices = geometry.attributes.position.array;
-    const colors = new Float32Array(vertices.length);
-    const canvas = document.createElement('canvas');
-    canvas.width = res;
-    canvas.height = res;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = 'black';
-    ctx.fillRect(0, 0, res, res);
-    ctx.fillStyle = 'white';
-    ctx.font = `bold ${res * 0.15}px Arial`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('BMGJET', res / 2, res / 2);
-    const imageData = ctx.getImageData(0, 0, res, res).data;
-    const waterColor = [0.169, 0.317, 0.362];
-    const sandColor  = [0.7, 0.659, 0.527];
-    for (let i = 0; i < vertices.length / 3; i++) {
-    const x = i % res;
-    const y = Math.floor(i / res);
-    const pixelIndex = (y * res + x) * 4;
-    const isLand = imageData[pixelIndex] > 128;
-    const h = isLand ? 20 : -50;
-    vertices[i * 3 + 2] = h * (window.HEIGHT_SCALE || 1.0);
-    const activeColor = isLand ? sandColor : waterColor;
-    colors[i * 3 + 0] = activeColor[0];
-    colors[i * 3 + 1] = activeColor[1];
-    colors[i * 3 + 2] = activeColor[2];
-   }
-    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geometry.computeVertexNormals();
-    const material = new THREE.MeshLambertMaterial({ vertexColors: true });
-    if (terrain) scene.remove(terrain);
-    terrain = new THREE.Mesh(geometry, material);
-    terrain.rotation.x = -Math.PI / 2;
-    scene.add(terrain);
-}
-        function setupControls() {
-            document.addEventListener('keydown', (e) => {
-                switch(e.code) {
-                    case 'KeyW': keys.w = true; break;
-                    case 'KeyA': keys.a = true; break;
-                    case 'KeyS': keys.s = true; break;
-                    case 'KeyD': keys.d = true; break;
-                    case 'ShiftLeft': case 'ShiftRight': keys.shift = true; break;
-                }
-            });
-            document.addEventListener('keyup', (e) => {
-                switch(e.code) {
-                    case 'KeyW': keys.w = false; break;
-                    case 'KeyA': keys.a = false; break;
-                    case 'KeyS': keys.s = false; break;
-                    case 'KeyD': keys.d = false; break;
-                    case 'ShiftLeft': case 'ShiftRight': keys.shift = false; break;
-                }
-            });
-            document.addEventListener('click', () => renderer.domElement.requestPointerLock());
-            document.addEventListener('pointerlockchange', () => {isPointerLocked = document.pointerLockElement === renderer.domElement;});
-            document.addEventListener('mousemove', (e) => {
-                if (!isPointerLocked) return;
-                euler.setFromQuaternion(camera.quaternion);
-                euler.y -= e.movementX * lookSpeed;
-                euler.x -= e.movementY * lookSpeed;
-                euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
-                camera.quaternion.setFromEuler(euler);
-            });
-            window.addEventListener('resize', () => {
-                camera.aspect = window.innerWidth / window.innerHeight;
-                camera.updateProjectionMatrix();
-                renderer.setSize(window.innerWidth, window.innerHeight);
-            });
-        }
-        function updateMovement(delta) {
-            let moveX = 0;
-            let moveZ = 0;
-            let currentSpeed = moveSpeed;
-            if (isMobile && joystickActive) {
-                moveX = joystickDeltaX;
-                moveZ = -joystickDeltaY;
-                currentSpeed = moveSpeed * mobileSpeedMultiplier;
-            }
-            if (!isMobile) {
-                if (!isPointerLocked && joystickDeltaX === 0 && joystickDeltaY === 0) {return;}
-                moveZ = Number(keys.w) - Number(keys.s);
-                moveX = Number(keys.d) - Number(keys.a);
-                currentSpeed = keys.shift ? moveSpeed * 6 : moveSpeed;
-            }
-            if (moveX !== 0 || moveZ !== 0) {
-                const speed = currentSpeed * delta;
-                const forward = new THREE.Vector3();
-                const right = new THREE.Vector3();
-                camera.getWorldDirection(forward);
-                forward.normalize();
-                right.crossVectors(forward, new THREE.Vector3(0, 1, 0));
-                const movement = new THREE.Vector3();
-                movement.addScaledVector(right, moveX * speed);
-                movement.addScaledVector(forward, moveZ * speed);
-                camera.position.add(movement);
-            }
-            document.getElementById('pos-display').textContent = `${camera.position.x.toFixed(0)}, ${camera.position.y.toFixed(0)}, ${camera.position.z.toFixed(0)}`;
-        }
-        function updateRotationDisplay() {
-            const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
-            const x = THREE.MathUtils.radToDeg(euler.x);
-            const y = THREE.MathUtils.radToDeg(euler.y);
-            const z = THREE.MathUtils.radToDeg(euler.z);
-            document.getElementById('rot-display').textContent = `${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`;
-        }
-        let lastTime = performance.now();
-        function animate() {
-            requestAnimationFrame(animate);
-            const delta = (performance.now() - lastTime) / 1000;
-            lastTime = performance.now();
-            updateMovement(delta);
-            updateRotationDisplay();
-            renderer.render(scene, camera);
-        }
-        init();
+      let scene, camera, renderer, terrain;
+      let gltfLoader = null;
+      const loadedGLBModels = {};
+      let showDebug = false;
+      let prefabMarkers = [];
+      let collisionMeshes = [];
+      let BBMarkers = [];
+      let isPointerLocked = false;
+      const tempMatrix = new THREE.Matrix4();
+      const tempPos = new THREE.Vector3();
+      const tempDir = new THREE.Vector3();
+      const tempQuat = new THREE.Quaternion();
+      const tempScale = new THREE.Vector3();
+      let moveSpeed = 50;
+      let lookSpeed = 0.002;
+      const keys = { w: false, a: false, s: false, d: false, shift: false, space: false, ctrl: false };
+      const euler = new THREE.Euler(0, 0, 0, 'YXZ');
+      let TERRAIN_SIZE = 1000;
+      let HEIGHT_SCALE = 1;
+      let SEGMENTS = 512;
+      window.terrainLoaded = false;
+      let showRoads = true;
+      let showRails = true;
+      let showPrefabs = true;
+      let showWater = true;
+      let showBB = true;
+      let waterMesh = null;
+      const CHECKBOX_STATE_KEY = 'mapViewer.layerStates';
+      const prefabOffsetCache = new Map();
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
+      let mobileSpeedMultiplier = 1;
+      let joystickActive = false;
+      let joystickTouchId = null;
+      let joystickStartX = 0;
+      let joystickStartY = 0;
+      let joystickDeltaX = 0;
+      let joystickDeltaY = 0;
+      let lookTouchId = null;
+      let lastLookX = 0;
+      let lastLookY = 0;
+      const ROAD_HEIGHT_OFFSET = 0.5;
+      const RAIL_HEIGHT_OFFSET = 0.8;
+      const RIVER_HEIGHT_OFFSET = 0.3;
+      const SEGMENT_FORWARD = new THREE.Vector3(0, 0, 1);
+      const debugEl = document.getElementById('debug-info');
+      let noClipMode = false;
+      let noClipSettings = {
+          walkSpeed: 5,
+          runSpeed: 10,
+          jumpHeight: 8.5,
+          duckHeight: 0.9,
+          eyeHeight: 1.55,
+          gravity: 21
+      };
+      let playerVelocity = new THREE.Vector3(0, 0, 0);
+      let isGrounded = true;
+      let isDucking = false;
+      let baseCameraY = 1.6;
+      const collisionRaycaster = new THREE.Raycaster();
+      const rayDownDirection = new THREE.Vector3(0, -1, 0);
+      const BBMarkerConfig = {
+      'underwater_lab': { size: [200, 100, 200], type: 'cube', opacity: 0.2 },
+      'entrance_bunker': { size: [100, 74, 100], type: 'cube', opacity: 0.2 },
+      'power_sub_small_2': { radius: 20, type: 'sphere', opacity: 0.2 },
+      'power_sub_small_1': { radius: 20, type: 'sphere', opacity: 0.2 },
+      'power_sub_big_2': { radius: 30, type: 'sphere', opacity: 0.2 },
+      'power_sub_big_1': { radius: 30, type: 'sphere', opacity: 0.2 },
+      'launch_site_1': { size: [775, 311, 476], type: 'cube', opacity: 0.2 },
+      'water_well_e': { radius: 24, type: 'sphere', opacity: 0.2 },
+      'water_well_d': { radius: 24, type: 'sphere', opacity: 0.2 },
+      'water_well_c': { radius: 24, type: 'sphere', opacity: 0.2 },
+      'water_well_b': { radius: 24, type: 'sphere', opacity: 0.2 },
+      'water_well_a': { radius: 24, type: 'sphere', opacity: 0.2 },
+      'stables_b': { radius: 85, type: 'sphere', opacity: 0.2 },
+      'stables_a': { radius: 85, type: 'sphere', opacity: 0.2 },
+      'sphere_tank': { radius: 130, type: 'sphere', opacity: 0.2 },
+      'satellite_dish': { radius: 170, type: 'sphere', opacity: 0.2 },
+      'mining_quarry': { radius: 70, type: 'sphere', opacity: 0.2 },
+      'warehouse': { radius: 100, type: 'sphere', opacity: 0.2 },
+      'supermarket_1': { radius: 120, type: 'sphere', opacity: 0.2 },
+      'radtown_1': { radius: 130, type: 'sphere', opacity: 0.2 },
+      'gas_station_1': { radius: 120, type: 'sphere', opacity: 0.2 },
+      'oilrig_2': { size: [128, 160, 128], type: 'cube', opacity: 0.2 },
+      'oilrig_1': { size: [128, 160, 138], type: 'cube', opacity: 0.2 },
+      'desert_military_base': { radius: 200, type: 'sphere', opacity: 0.2 },
+      'radtown_small_3': { size: [250, 64, 250], type: 'cube', opacity: 0.2 },
+      'nuclear_missile_silo': { radius: 170, type: 'sphere', opacity: 0.2 },
+      'junkyard_1': { radius: 170, type: 'sphere', opacity: 0.2 },
+      'compound': { radius: 200, type: 'sphere', opacity: 0.2 },
+      'bandit_town': { radius: 150, type: 'sphere', opacity: 0.2 },
+      'lighthouse': { radius: 100, type: 'sphere', opacity: 0.2 },
+      'water_treatment_plant_1': { size: [350, 165, 450], type: 'cube', opacity: 0.2 },
+      'trainyard_1': { size: [400, 200, 400], type: 'cube', opacity: 0.2 },
+      'powerplant_1': { radius: 210, type: 'sphere', opacity: 0.2 },
+      'military_tunnel_1': { radius: 210, type: 'sphere', opacity: 0.2 },
+      'excavator_1': { radius: 220, type: 'sphere', opacity: 0.2 },
+      'airfield_1': { size: [512, 85, 384], type: 'cube', opacity: 0.2 },
+      'jungle_ziggurat_a': { radius: 80, type: 'sphere', opacity: 0.2 },
+      'jungle_ruins_e': { radius: 32, type: 'sphere', opacity: 0.2 },
+      'jungle_ruins_d': { radius: 32, type: 'sphere', opacity: 0.2 },
+      'jungle_ruins_c': { radius: 32, type: 'sphere', opacity: 0.2 },
+      'jungle_ruins_b': { radius: 32, type: 'sphere', opacity: 0.2 },
+      'jungle_ruins_a': { radius: 32, type: 'sphere', opacity: 0.2 },
+      'harbor_2': { radius: 250, type: 'sphere', opacity: 0.2 },
+      'harbor_1': { radius: 250, type: 'sphere', opacity: 0.2 },
+      'ferry_terminal_1': { radius: 200, type: 'sphere', opacity: 0.2 },
+      'fishing_village_c': { radius: 125, type: 'sphere', opacity: 0.2 },
+      'fishing_village_b': { radius: 100, type: 'sphere', opacity: 0.2 },
+      'fishing_village_a': { radius: 125, type: 'sphere', opacity: 0.2 },
+      'cave_small_medium': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
+      'cave_small_hard': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
+      'cave_small_easy': { size: [60, 64, 60], type: 'cube', opacity: 0.2 },
+      'cave_medium_medium': { size: [130, 64, 100], type: 'cube', opacity: 0.2 },
+      'cave_medium_hard': { size: [120, 64, 130], type: 'cube', opacity: 0.2 },
+      'cave_medium_easy': { size: [100, 64, 80], type: 'cube', opacity: 0.2 },
+      'cave_large_sewers_hard': { size: [120, 64, 120], type: 'cube', opacity: 0.2 },
+      'cave_large_medium': { size: [100, 64, 130], type: 'cube', opacity: 0.2 },
+      'cave_large_hard': { size: [150, 64, 180], type: 'cube', opacity: 0.2 },
+      'arctic_research_base_a': { radius: 140, type: 'sphere', opacity: 0.2 },
+      };
+      function isBBMarkerType(prefabName) {return BBMarkerConfig.hasOwnProperty(prefabName);}
+      function getBBConfig(label) {return BBMarkerConfig[label] || null;}
+      function createBBSphereMarker(x, y, z, radius, label, opacity = 0.4) {
+          const geometry = new THREE.SphereGeometry(radius, 32, 32);
+          const material = new THREE.MeshBasicMaterial({
+              color: 0xff0000,
+              transparent: true,
+              opacity: opacity,
+              side: THREE.DoubleSide,
+              depthWrite: false
+          });
+          const sphere = new THREE.Mesh(geometry, material);
+          sphere.position.set(x, y, z);
+          sphere.renderOrder = 10;
+          scene.add(sphere);
+          BBMarkers.push(sphere);
+          return sphere;
+      }
+      function createBBCubeMarker(x, y, z, sizeX, sizeY, sizeZ, rotX, rotY, rotZ, label, opacity = 0.35) {
+          const geometry = new THREE.BoxGeometry(sizeX, sizeY, sizeZ);
+          const material = new THREE.MeshBasicMaterial({
+              color: 0xff0000,
+              transparent: true,
+              opacity: opacity,
+              side: THREE.DoubleSide,
+              depthWrite: false
+          });
+          const cube = new THREE.Mesh(geometry, material);
+          cube.position.set(x, y, z);
+          const euler = new THREE.Euler(
+              THREE.MathUtils.degToRad(-rotX),
+              THREE.MathUtils.degToRad(-rotY),
+              THREE.MathUtils.degToRad(-rotZ),
+              'YXZ'
+          );
+          cube.rotation.copy(euler);
+          cube.renderOrder = 10;
+          scene.add(cube);
+          BBMarkers.push(cube);
+          return cube;
+      }
+      function createBBMarkerFromPrefab(prefab) {
+          const pos = prefab.position || prefab.Position || prefab.pos || prefab.Postion;
+          if (!pos) {return;}
+          const rot = prefab.rotation || prefab.Rotation || prefab.rot || { x: 0, y: 0, z: 0 };
+          const prefabName = prefab.Name || 'Unknown';
+          const config = getBBConfig(prefabName);
+          if (!config) {return;}
+          const x = pos[0] !== undefined ? pos[0] : (pos.x || 0);
+          const y = pos[1] !== undefined ? pos[1] : (pos.y || 0);
+          const z = pos[2] !== undefined ? -pos[2] : -(pos.z || 0);
+          const rotX = rot[0] !== undefined ? rot[0] : (rot.x || 0);
+          const rotY = rot[1] !== undefined ? rot[1] : (rot.y || 0);
+          const rotZ = rot[2] !== undefined ? rot[2] : (rot.z || 0);
+          switch (config.type) {
+              case 'cube':
+                  let sizeX, sizeY, sizeZ;
+                  if (Array.isArray(config.size)) {
+                      sizeX = config.size[0];
+                      sizeY = config.size[1];
+                      sizeZ = config.size[2];
+                  } else {
+                      const s = config.radius || 50;
+                      sizeX = s;
+                      sizeY = s;
+                      sizeZ = s;
+                  }
+                  createBBCubeMarker(x, y, z, sizeX, sizeY, sizeZ, rotX, rotY, rotZ, prefabName, config.opacity);
+                  break;
+              case 'sphere':
+              default:
+                  createBBSphereMarker(x, y, z, config.radius, prefabName, config.opacity);
+                  break;
+          }
+      }
+      showRoads   = applyCheckboxState('showRoads', true);
+      showRails   = applyCheckboxState('showRails', true);
+      showPrefabs = applyCheckboxState('showPrefabs', true);
+      showWater   = applyCheckboxState('showWater', true);
+      showBB   = applyCheckboxState('showBB', true);
+      showDebug   = applyCheckboxState('showDebug', false);
+      setTimeout(() => {
+          if (roadInstancer) roadInstancer.visible = showRoads;
+          if (railInstancer) railInstancer.visible = showRails;
+          if (riverInstancer) riverInstancer.visible = showWater;
+          prefabMarkers.forEach(marker => marker.visible = showPrefabs);
+          BBMarkers.forEach(marker => marker.visible = showBB);
+          if (waterMesh) waterMesh.visible = showWater;
+      }, 1000);
+      const noclipBtn = document.getElementById('noclip-btn');
+      noclipBtn.addEventListener('click', () => {
+          noClipMode = !noClipMode;
+          noclipBtn.classList.toggle('active', noClipMode);
+          if (noClipMode) {renderer.domElement.requestPointerLock();}
+      });
+      function setupMobileControls() {
+          if (!isMobile) return;
+          function requestFullscreen() {
+              const elem = document.documentElement;
+              if (elem.requestFullscreen) {
+                  elem.requestFullscreen().catch(() => {});
+              } else if (elem.webkitRequestFullscreen) {
+                  elem.webkitRequestFullscreen();
+              } else if (elem.msRequestFullscreen) {
+                  elem.msRequestFullscreen();
+              }
+          }
+          let fullscreenRequested = false;
+          function tryFullscreen() {
+              if (!fullscreenRequested) {
+                  fullscreenRequested = true;
+                  requestFullscreen();
+              }
+          }
+          document.addEventListener('touchstart', tryFullscreen, { once: true, passive: true });
+          const joystickContainer = document.getElementById('joystick-container');
+          const joystickKnob = document.getElementById('joystick-knob');
+          const lookArea = document.getElementById('look-area');
+          const speedBtn = document.getElementById('speed-btn');
+          joystickContainer.addEventListener('touchstart', (e) => {
+              e.preventDefault();
+              if (joystickTouchId !== null) return;
+              const touch = e.changedTouches[0];
+              joystickTouchId = touch.identifier;
+              const rect = joystickContainer.getBoundingClientRect();
+              joystickStartX = rect.left + rect.width / 2;
+              joystickStartY = rect.top + rect.height / 2;
+              joystickActive = true;
+          }, { passive: false });
+          joystickContainer.addEventListener('touchmove', (e) => {
+              e.preventDefault();
+              for (const touch of e.changedTouches) {
+                  if (touch.identifier === joystickTouchId) {
+                      const dx = touch.clientX - joystickStartX;
+                      const dy = touch.clientY - joystickStartY;
+                      const maxDist = 40;
+                      const dist = Math.sqrt(dx * dx + dy * dy);
+                      const clampedDist = Math.min(dist, maxDist);
+                      const angle = Math.atan2(dy, dx);
+                      const clampedX = Math.cos(angle) * clampedDist;
+                      const clampedY = Math.sin(angle) * clampedDist;
+                      joystickKnob.style.transform = `translate(calc(-50% + ${clampedX}px), calc(-50% + ${clampedY}px))`;
+                      joystickDeltaX = clampedX / maxDist;
+                      joystickDeltaY = clampedY / maxDist;
+                  }
+              }
+          }, { passive: false });
+          joystickContainer.addEventListener('touchend', (e) => {
+              for (const touch of e.changedTouches) {
+                  if (touch.identifier === joystickTouchId) {
+                      joystickTouchId = null;
+                      joystickActive = false;
+                      joystickKnob.style.transform = 'translate(-50%, -50%)';
+                      joystickDeltaX = 0;
+                      joystickDeltaY = 0;
+                  }
+              }
+          });
+          joystickContainer.addEventListener('touchcancel', (e) => {
+              joystickTouchId = null;
+              joystickActive = false;
+              joystickKnob.style.transform = 'translate(-50%, -50%)';
+              joystickDeltaX = 0;
+              joystickDeltaY = 0;
+          });
+          lookArea.addEventListener('touchstart', (e) => {
+              e.preventDefault();
+              if (lookTouchId !== null) return;
+              const touch = e.changedTouches[0];
+              lookTouchId = touch.identifier;
+              lastLookX = touch.clientX;
+              lastLookY = touch.clientY;
+          }, { passive: false });
+          lookArea.addEventListener('touchmove', (e) => {
+              e.preventDefault();
+              for (const touch of e.changedTouches) {
+                  if (touch.identifier === lookTouchId) {
+                      const dx = touch.clientX - lastLookX;
+                      const dy = touch.clientY - lastLookY;
+                      lastLookX = touch.clientX;
+                      lastLookY = touch.clientY;
+                      euler.setFromQuaternion(camera.quaternion);
+                      euler.y -= dx * lookSpeed * 2;
+                      euler.x -= dy * lookSpeed * 2;
+                      euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+                      camera.quaternion.setFromEuler(euler);
+                  }
+              }
+          }, { passive: false });
+          lookArea.addEventListener('touchend', (e) => {
+              for (const touch of e.changedTouches) {
+                  if (touch.identifier === lookTouchId) {
+                      lookTouchId = null;
+                  }
+              }
+          });
+          lookArea.addEventListener('touchcancel', (e) => {lookTouchId = null;});
+          speedBtn.addEventListener('touchstart', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              mobileSpeedMultiplier = mobileSpeedMultiplier === 1 ? 6 : 1;
+              speedBtn.classList.toggle('active', mobileSpeedMultiplier > 1);
+          }, { passive: false });
+          speedBtn.addEventListener('click', (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              mobileSpeedMultiplier = mobileSpeedMultiplier === 1 ? 6 : 1;
+              speedBtn.classList.toggle('active', mobileSpeedMultiplier > 1);
+          });
+          document.getElementById('canvas-container').addEventListener('touchstart', (e) => {
+              if (e.target.id === 'canvas-container' && lookTouchId === null) {
+                  const touch = e.changedTouches[0];
+                  const rect = joystickContainer.getBoundingClientRect();
+                  const isInJoystick = touch.clientX < rect.right + 20 && touch.clientY > rect.top - 20;
+                  if (!isInJoystick) {
+                      lookTouchId = touch.identifier;
+                      lastLookX = touch.clientX;
+                      lastLookY = touch.clientY;
+                  }
+              }
+          }, { passive: false });
+          document.getElementById('canvas-container').addEventListener('touchmove', (e) => {
+              for (const touch of e.changedTouches) {
+                  if (touch.identifier === lookTouchId) {
+                      const dx = touch.clientX - lastLookX;
+                      const dy = touch.clientY - lastLookY;
+                      lastLookX = touch.clientX;
+                      lastLookY = touch.clientY;
+                      euler.setFromQuaternion(camera.quaternion);
+                      euler.y -= dx * lookSpeed * 2;
+                      euler.x -= dy * lookSpeed * 2;
+                      euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+                      camera.quaternion.setFromEuler(euler);
+                  }
+              }
+          }, { passive: false });
+          document.getElementById('canvas-container').addEventListener('touchend', (e) => {
+              for (const touch of e.changedTouches) {
+                  if (touch.identifier === lookTouchId) {
+                      lookTouchId = null;
+                  }
+              }
+          });
+      }
+      function onLayerChange(id, callback) {
+      document.getElementById(id).addEventListener('change', (e) => {
+      const state = loadLayerState();
+      state[id] = e.target.checked;
+      saveLayerState(state);
+      callback(e.target.checked);
+      });
+      }
+      onLayerChange('showRoads', (v) => {
+      showRoads = v;
+      if (roadInstancer) roadInstancer.visible = v;
+      });
+      
+      onLayerChange('showRails', (v) => {
+      showRails = v;
+      if (railInstancer) railInstancer.visible = v;
+      });
+      onLayerChange('showPrefabs', (v) => {
+      showPrefabs = v;
+      prefabMarkers.forEach(m => m.visible = v);
+      });
+      onLayerChange('showBB', (v) => {
+      showBB = v;
+      BBMarkers.forEach(m => m.visible = v);
+      });
+      onLayerChange('showWater', (v) => {
+      showWater = v;
+      if (waterMesh) waterMesh.visible = v;
+      if (riverInstancer) riverInstancer.visible= v;
+      });
+      onLayerChange('showDebug', (v) => {showDebug = v; debugEl.style.display = showDebug ? 'block' : 'none';});
+      function loadLayerState() {try {return JSON.parse(localStorage.getItem(CHECKBOX_STATE_KEY)) || {};} catch {return {};}}
+      function saveLayerState(state) {localStorage.setItem(CHECKBOX_STATE_KEY, JSON.stringify(state));}
+      function applyCheckboxState(id, defaultValue) {
+      const saved = loadLayerState();
+      const checkbox = document.getElementById(id);
+      const value = saved[id] !== undefined ? saved[id] : defaultValue;
+      checkbox.checked = value;
+      return value;
+      }
+      function log(message, type = 'success') {
+          if(showDebug)
+          {
+          console.log(message);
+          const className = type === 'error' ? 'error' : type === 'info' ? 'info' : 'success';
+          debugEl.innerHTML += `<div class=""${className}"">${new Date().toLocaleTimeString()} - ${message}</div>`;
+          debugEl.scrollTop = debugEl.scrollHeight;
+          }
+      }
+      function base64ToInt16Array(base64) {
+          try {
+              const binaryString = atob(base64);
+              const len = binaryString.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i++) {
+                  bytes[i] = binaryString.charCodeAt(i);
+              }
+              return new Int16Array(bytes.buffer);
+          } catch (e) {
+              log(`Base64 decode error: ${e.message}`, 'error');
+              return null;
+          }
+      }
+      async function decompressGzipBase64(base64) {
+          try {
+              const binaryString = atob(base64);
+              const len = binaryString.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i++) {bytes[i] = binaryString.charCodeAt(i);}
+              const ds = new DecompressionStream('gzip');
+              const decompressedStream = new Response(bytes).body.pipeThrough(ds);
+              const resultBuffer = await new Response(decompressedStream).arrayBuffer();
+              return resultBuffer;
+          } catch (e) {return null;}
+      }
+      async function decompressHeightmap(base64) {
+          const buffer = await decompressGzipBase64(base64);
+          if (!buffer) return null;
+          return new Int16Array(buffer);
+      }
+      async function decompressData(base64) {
+          const buffer = await decompressGzipBase64(base64);
+          if (!buffer) return null;
+          return new Uint8Array(buffer);
+      }
+      function downsampleHeightmap(data, srcRes, dstRes) {
+      const result = new Float32Array(dstRes * dstRes);
+      const ratio = (srcRes - 1) / (dstRes - 1);
+      const WATER_LEVEL_SHORT = 16336;
+      const MAX_DEVIATION_SHORT = 16336;
+      const MAX_DEVIATION_METERS = 500;
+      for (let y = 0; y < dstRes; y++) {
+      for (let x = 0; x < dstRes; x++) {
+          const srcX = x * ratio;
+          const srcY = y * ratio;
+          const x0 = Math.floor(srcX);
+          const y0 = Math.floor(srcY);
+          const x1 = Math.min(x0 + 1, srcRes - 1);
+          const y1 = Math.min(y0 + 1, srcRes - 1);
+          const fx = srcX - x0;
+          const fy = srcY - y0;
+          const h00 = data[y0 * srcRes + x0];
+          const h10 = data[y0 * srcRes + x1];
+          const h01 = data[y1 * srcRes + x0];
+          const h11 = data[y1 * srcRes + x1];
+          const rawHeight =
+              (1 - fx) * (1 - fy) * h00 +
+              fx * (1 - fy) * h10 +
+              (1 - fx) * fy * h01 +
+              fx * fy * h11;
+          result[y * dstRes + x] = (rawHeight - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
+      }
+      }
+      log(`Heights converted to world units`);
+      return result;
+      }
+      function createSegmentInstancer(maxSegments, width, height, color) {
+      const geometry = new THREE.BoxGeometry(width, height, 1);
+      const material = new THREE.MeshLambertMaterial({ color });
+      const instanced = new THREE.InstancedMesh(
+      geometry,
+      material,
+      maxSegments
+      );
+      instanced.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      scene.add(instanced);
+      return instanced;
+      }
+      let roadInstancer;
+      let railInstancer;
+      let riverInstancer;
+      
+      function initInstancers(terrainData) {
+      const maxRoadSegs  = terrainData.roads?.reduce((s, r) => s + r.length, 0) || 0;
+      const maxRailSegs  = terrainData.rail?.reduce((s, r) => s + r.length, 0) || 0;
+      const maxRiverSegs = terrainData.river?.reduce((s, r) => s + r.length, 0) || 0;
+      roadInstancer  = createSegmentInstancer(maxRoadSegs, 8, 0.5, 0x111111);
+      railInstancer  = createSegmentInstancer(maxRailSegs, 3, 0.5, 0x3d2b1f);
+      riverInstancer = createSegmentInstancer(maxRiverSegs, 8, 0.2, 0x87CEEB);
+      }
+      async function init() {
+          scene = new THREE.Scene();
+          scene.background = new THREE.Color(0x87CEEB);
+          scene.fog = new THREE.Fog(0x87CEEB, 1000, 4000);
+          camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 9999);
+          camera.position.set(0, 300, 0);
+          camera.lookAt(0, 0, -1);
+          renderer = new THREE.WebGLRenderer({ antialias: true });
+          renderer.setSize(window.innerWidth, window.innerHeight);
+          renderer.setPixelRatio(window.devicePixelRatio);
+          renderer.shadowMap.enabled = false;
+          renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+          document.getElementById('canvas-container').appendChild(renderer.domElement);
+          const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+          scene.add(ambientLight);
+          const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+          directionalLight.position.set(100, 200, 100);
+          scene.add(directionalLight);
+          await loadTerrain();
+          const fogNear = TERRAIN_SIZE * 0.2;
+          const fogFar = TERRAIN_SIZE * 0.6;
+          scene.fog = new THREE.Fog(0x87CEEB, fogNear, fogFar);
+          camera.position.y = Math.max(300, TERRAIN_SIZE * 0.15);
+          setupControls();
+          setupMobileControls();
+          setTimeout(() => {document.getElementById('loading').classList.add('hidden');}, 1000);
+          animate();
+      }
+      async function loadTerrain() {
+          try {
+              const response = await fetch('/3dmap/data');
+              if (!response.ok) {throw new Error(`HTTP ${response.status}: ${response.statusText}`);}
+              const terrainData = await response.json();
+              log(`Received: worldSize=${terrainData.worldSize}, heightMapRes=${terrainData.heightMapResolution}`, 'info');
+              TERRAIN_SIZE = terrainData.worldSize || 1000;
+              SEGMENTS = terrainData.heightMapResolution || 512;
+              if(SEGMENTS < 512) SEGMENTS = 512;
+              HEIGHT_SCALE = 1.0;
+              let rawHeights = await decompressHeightmap(terrainData.heightmap);
+              if (!rawHeights) {
+              rawHeights = base64ToInt16Array(terrainData.heightmap);
+              window.terrainLoaded = true;
+              TERRAIN_SIZE = 1000
+              createDemoTerrain();
+              return;
+              }
+              if (!rawHeights) throw new Error('Failed to decode heightmap');
+              log(`Decoded ${rawHeights.length} height values`);
+              let splatData = await decompressData(terrainData.splatmap);
+              if (splatData) log(`Decoded ${splatData.length} splat values`);
+              const splatRes = terrainData.splatMapResolution || terrainData.heightMapResolution;
+              log(`Splat: ${splatRes}x${splatRes}`);
+              let minH = Infinity, maxH = -Infinity;
+              for (let i = 0; i < rawHeights.length; i++) {
+                  if (rawHeights[i] < minH) minH = rawHeights[i];
+                  if (rawHeights[i] > maxH) maxH = rawHeights[i];
+              }
+              initInstancers(terrainData);
+              const srcRes = terrainData.heightMapResolution;
+              const dstRes = SEGMENTS + 1;
+              let heights;
+              if (srcRes !== dstRes) {heights = downsampleHeightmap(rawHeights, srcRes, dstRes);
+              } else {
+                  const WATER_LEVEL_SHORT = 16336;
+                  const MAX_DEVIATION_SHORT = 16336;
+                  const MAX_DEVIATION_METERS = 500;
+                  const minWorldH = (minH - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
+                  const maxWorldH = (maxH - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;
+                  log(`Converting ${rawHeights.length} heights directly to world units`, 'info');
+                  heights = new Float32Array(rawHeights.length);
+                  for (let i = 0; i < rawHeights.length; i++) {heights[i] = (rawHeights[i] - WATER_LEVEL_SHORT) / MAX_DEVIATION_SHORT * MAX_DEVIATION_METERS;}
+              }
+              window.terrainHeights = heights;
+              window.terrainResolution = dstRes;
+              window.splatData = splatData;
+              window.splatResolution = splatRes;
+              window.terrainLoaded = true;
+              createTerrainMesh(heights, terrainData.splatColors);
+              createWaterMesh();
+              if (terrainData.roads && terrainData.roads.length > 0) {
+                  log(`Drawing ${terrainData.roads.length} roads from server data...`);
+                  drawRoadsFromServer(terrainData.roads);
+              }
+              if (terrainData.rail && terrainData.rail.length > 0) {
+                  log(`Drawing ${terrainData.rail.length} rails from server data...`);
+                  drawRailsFromServer(terrainData.rail);
+              }
+              if (terrainData.prefabs && terrainData.prefabs.length > 0) {
+                  log(`Drawing ${terrainData.prefabs.length} prefabs from server data...`);
+                  drawPrefabs(terrainData.prefabs);
+              }
+              if (terrainData.river && terrainData.river.length > 0) {
+                  log(`Drawing ${terrainData.river.length} river from server data...`);
+                  drawRiverFromServer(terrainData.river);
+              }
+          } catch (error) {
+              log(`Failed to load terrain: ${error.message}`, 'error');
+              log('Creating demo terrain...', 'info');
+              window.terrainLoaded = true;
+              createDemoTerrain();
+          }
+      }
+      function createTerrainMesh(heights, splatColors) {
+      const colorMap = {
+      dirt:    splatColors?.dirt,
+      snow:    splatColors?.snow,
+      sand:    splatColors?.sand,
+      rock:    splatColors?.rock,
+      grass:   splatColors?.grass,
+      forest:  splatColors?.forest,
+      stones:  splatColors?.stones,
+      gravel:  splatColors?.gravel
+      };
+      const channelColors = [
+      colorMap.dirt,
+      colorMap.snow,
+      colorMap.sand,
+      colorMap.rock,
+      colorMap.grass,
+      colorMap.forest,
+      colorMap.stones,
+      colorMap.gravel
+      ];
+      function getSplatChannel(x, y, channel, splatRes) {
+      if (!window.splatData) return 0;
+      const channelOffset = channel * splatRes * splatRes;
+      const index = channelOffset + y * splatRes + x;
+      return index < window.splatData.length ? window.splatData[index] : 0;
+      }
+      const geometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, SEGMENTS, SEGMENTS);
+      const vertices = geometry.attributes.position.array;
+      const colors = new Float32Array(vertices.length);
+      const res = SEGMENTS + 1;
+      const splatRes = window.splatResolution || res;
+      for (let i = 0; i < vertices.length / 3; i++) {
+      const x = i % res;
+      const y = Math.floor(i / res);
+      const flippedY = (res - 1) - y;
+      vertices[i * 3 + 2] = heights[flippedY * res + x] || 0;
+      const sx = Math.floor((x / (res - 1)) * (splatRes - 1));
+      const sy = Math.floor((flippedY / (res - 1)) * (splatRes - 1));
+      let r, g, b;
+          let totalWeight = 0;
+          const weights = [];
+          for (let c = 0; c < 8; c++) {
+              weights.push(getSplatChannel(sx, sy, c, splatRes) / 255.0);
+              totalWeight += weights[c];
+          }
+          if (totalWeight > 0) {
+              r = g = b = 0;
+              for (let c = 0; c < 8; c++) {
+                  const w = weights[c] / totalWeight;
+                  r += channelColors[c][0] * w;
+                  g += channelColors[c][1] * w;
+                  b += channelColors[c][2] * w;
+              }
+          } else {
+              r = colorMap.grass[0];
+              g = colorMap.grass[1];
+              b = colorMap.grass[2];
+          }
+      colors[i * 3] = r;
+      colors[i * 3 + 1] = g;
+      colors[i * 3 + 2] = b;
+      }
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geometry.computeVertexNormals();
+      terrain = new THREE.Mesh(geometry, new THREE.MeshLambertMaterial({vertexColors: true}));
+      terrain.rotation.x = -Math.PI / 2;
+      terrain.name = 'terrain';
+      scene.add(terrain);
+      collisionMeshes.push(terrain);
+      log('Terrain mesh created', 'success');
+      }
+      function createWaterMesh() {
+      const waterHeight = 0.01;
+      const waterGeo = new THREE.PlaneGeometry(
+      TERRAIN_SIZE,
+      TERRAIN_SIZE,
+      1,
+      1
+      );
+      const waterMat = new THREE.MeshPhongMaterial({
+      color: 0x1a5f7a,
+      transparent: true,
+      opacity: 0.75,
+      shininess: 100,
+      depthWrite: true
+      });
+      waterMesh = new THREE.Mesh(waterGeo, waterMat);
+      waterMesh.rotation.x = -Math.PI / 2;
+      waterMesh.position.y = waterHeight;
+      waterMesh.renderOrder = 1;
+      scene.add(waterMesh);
+      }
+      function getTerrainHeightAt(worldX, worldZ) {
+          if (!window.terrainHeights || !window.terrainResolution) return 0;
+          const res = window.terrainResolution;
+          const halfSize = TERRAIN_SIZE / 2;
+          const percentX = (worldX + halfSize) / TERRAIN_SIZE;
+          const percentZ = (worldZ + halfSize) / TERRAIN_SIZE;
+          const gridX = Math.floor(percentX * (res - 1));
+          const gridZ = Math.floor(percentZ * (res - 1));
+          const flippedGridZ = (res - 1) - gridZ;
+          if (gridX < 0 || gridX >= res || flippedGridZ < 0 || flippedGridZ >= res) {return 0;}
+          return window.terrainHeights[flippedGridZ * res + gridX] || 0;
+      }
+      function getHeightAtPositionRaycast(worldX, worldY, worldZ, maxDistance = 100) {
+          const rayOrigin = new THREE.Vector3(worldX, worldY + 50, worldZ);
+          collisionRaycaster.set(rayOrigin, rayDownDirection);
+          collisionRaycaster.far = maxDistance;
+          const raycastTargets = [];
+          for (const marker of prefabMarkers) {
+              if (!marker || !marker.visible) continue;
+              if (marker.isSprite) continue;
+              if (!marker.geometry) continue;
+              raycastTargets.push(marker);
+          }
+          const intersects = collisionRaycaster.intersectObjects(raycastTargets, true);
+          if (intersects.length > 0) {return intersects[0].point.y;}
+          return null;
+      }
+      function collectCollisionMeshes(object, meshes) {
+          object.traverse((child) => {
+              if (child.isMesh && child.geometry) {
+                  if (child.geometry.attributes.position && child.geometry.attributes.position.count > 0) {meshes.push(child);}
+              }
+          });
+      }
+      function getGroundHeightAt(worldX, worldZ) {
+          const raycastHeight = getHeightAtPositionRaycast(worldX, 0, worldZ, 150);
+          let maxHeight = getTerrainHeightAt(worldX, worldZ);
+          if (raycastHeight !== null) {maxHeight = Math.max(maxHeight, raycastHeight);}
+          return maxHeight;
+      }
+      function drawRoadsFromServer(roadsData) {
+      let index = 0;
+      roadsData.forEach(path => {
+      for (let i = 0; i < path.length - 1; i++) {
+          const p1 = path[i];
+          const p2 = path[i+1];
+          const x1 = p1[0] ?? p1.x;
+          const z1 = -(p1[2] ?? p1.z);
+          const x2 = p2[0] ?? p2.x;
+          const z2 = -(p2[2] ?? p2.z);
+          const h1 = getTerrainHeightAt(x1, z1) + ROAD_HEIGHT_OFFSET;
+          const h2 = getTerrainHeightAt(x2, z2) + ROAD_HEIGHT_OFFSET;
+          const v1 = new THREE.Vector3(x1, h1, z1);
+          const v2 = new THREE.Vector3(x2, h2, z2);
+          addSegmentInstance(roadInstancer, index++, v1, v2);
+      }
+      });
+      roadInstancer.count = index;
+      roadInstancer.instanceMatrix.needsUpdate = true;
+      }
+      function drawRiverFromServer(riverData) {
+      let index = 0;
+      riverData.forEach(path => {
+      for (let i = 0; i < path.length - 1; i++) {
+          const p1 = path[i];
+          const p2 = path[i+1];
+          const x1 = p1[0] ?? p1.x;
+          const z1 = -(p1[2] ?? p1.z);
+          const x2 = p2[0] ?? p2.x;
+          const z2 = -(p2[2] ?? p2.z);
+          const h1 = getTerrainHeightAt(x1, z1) + RIVER_HEIGHT_OFFSET;
+          const h2 = getTerrainHeightAt(x2, z2) + RIVER_HEIGHT_OFFSET;
+          const v1 = new THREE.Vector3(x1, h1, z1);
+          const v2 = new THREE.Vector3(x2, h2, z2);
+          addSegmentInstance(riverInstancer, index++, v1, v2);
+      }
+      });
+      riverInstancer.count = index;
+      riverInstancer.instanceMatrix.needsUpdate = true;
+      }
+      function drawRailsFromServer(railsData) {
+      let index = 0;
+      railsData.forEach(path => {
+      for (let i = 0; i < path.length - 1; i++) {
+          const p1 = path[i];
+          const p2 = path[i+1];
+          const x1 = p1[0] ?? p1.x;
+          const z1 = -(p1[2] ?? p1.z);
+          const x2 = p2[0] ?? p2.x;
+          const z2 = -(p2[2] ?? p2.z);
+          const h1 = getTerrainHeightAt(x1, z1) + RAIL_HEIGHT_OFFSET;
+          const h2 = getTerrainHeightAt(x2, z2) + RAIL_HEIGHT_OFFSET;
+          const v1 = new THREE.Vector3(x1, h1, z1);
+          const v2 = new THREE.Vector3(x2, h2, z2);
+          addSegmentInstance(railInstancer, index++, v1, v2);
+      }
+      });
+      railInstancer.count = index;
+      railInstancer.instanceMatrix.needsUpdate = true;
+      }
+      const tempUp = new THREE.Vector3(0, 1, 0);
+      function addSegmentInstance(instancer, index, v1, v2) {
+      const length = v1.distanceTo(v2);
+      tempPos.copy(v1).add(v2).multiplyScalar(0.5);
+      tempDir.subVectors(v2, v1).normalize();
+      tempQuat.setFromUnitVectors(SEGMENT_FORWARD, tempDir);
+      tempScale.set(1, 1, length);
+      tempMatrix.compose(tempPos, tempQuat, tempScale);
+      instancer.setMatrixAt(index, tempMatrix);
+      }
+      function initGLTFLoader() {if (typeof THREE.GLTFLoader !== 'undefined') {gltfLoader = new THREE.GLTFLoader();} else {log('GLTFLoader not available, will use cube markers', 'error');}}
+      function loadGLBModel(url, onLoad, onError) {
+      if (!gltfLoader) {
+      if (onError) onError('GLTFLoader not initialized');
+      return;
+      }
+      gltfLoader.load(
+      url,
+      (gltf) => {if (onLoad) onLoad(gltf);},
+      (progress) => {},
+      (error) => {if (onError) onError(error);}
+      );
+      }
+      async function loadPrefabOffset(prefabName) {
+      if (prefabOffsetCache.has(prefabName)) {
+      return await prefabOffsetCache.get(prefabName);
+      }
+      const fetchPromise = (async () => {
+      const offsetUrl = `${window.location.origin}/Models/${prefabName}.json`;
+      
+      try {
+          const response = await fetch(offsetUrl);
+          if (!response.ok) throw new Error(`Status: ${response.status}`);
+      
+          const data = await response.json();
+          return normalizeOffsets(data);
+      } catch (e) {
+          console.warn(`Load failed for ${prefabName}, using defaults.`, e.message);
+          return normalizeOffsets(null);
+      }
+      })();
+      prefabOffsetCache.set(prefabName, fetchPromise);
+      return await fetchPromise;
+      }
+      function normalizeOffsets(data) {
+      const d = data || {};
+      return {
+      positionOffset: {
+          x: d.positionOffset?.x ?? d.localPositionOffset?.x ?? 0,
+          y: d.positionOffset?.y ?? d.localPositionOffset?.y ?? 0,
+          z: d.positionOffset?.z ?? d.localPositionOffset?.z ?? 0
+      },
+      rotationOffset: {
+          x: d.rotationOffset?.x ?? d.localRotationOffset?.x ?? 0,
+          y: d.rotationOffset?.y ?? d.localRotationOffset?.y ?? 0,
+          z: d.rotationOffset?.z ?? d.localRotationOffset?.z ?? 0
+      },
+      scaleMultiplier: {
+          x: d.scaleMultiplier?.x ?? d.localScaleOffset?.x ?? 1,
+          y: d.scaleMultiplier?.y ?? d.localScaleOffset?.y ?? 1,
+          z: d.scaleMultiplier?.z ?? d.localScaleOffset?.z ?? 1
+      }
+      };
+      }
+      function transformPositionFromUnity(x, y, z) {return new THREE.Vector3(x, y, -z);}
+      function transformRotationFromUnity(rotX, rotY, rotZ) {
+      return {
+      x: -rotX,
+      y: -rotY,
+      z: -rotZ
+      };
+      }
+      function applyTransformWithLocalOffsets(obj, unityX, unityY, unityZ, unityRot, baseScale, offsets) {
+      const normalizedPos = transformPositionFromUnity(unityX || 0, unityY || 0, unityZ || 0);
+      const normalizedRot = transformRotationFromUnity(
+      unityRot?.x || 0,
+      unityRot?.y || 0,
+      unityRot?.z || 0
+      );
+      obj.updateMatrixWorld(true);
+      const glbScale = new THREE.Vector3();
+      const glbQuat = new THREE.Quaternion();
+      const glbPos = new THREE.Vector3();
+      obj.matrixWorld.decompose(glbPos, glbQuat, glbScale);
+      const posOffset = offsets?.positionOffset ?? offsets?.localPositionOffset;
+      const rotOffset = offsets?.rotationOffset ?? offsets?.localRotationOffset;
+      const scaleOff = offsets?.scaleMultiplier ?? offsets?.localScaleOffset;
+      const normalizedQuat = new THREE.Quaternion();
+      const normalizedEuler = new THREE.Euler(
+      THREE.MathUtils.degToRad(normalizedRot.x),
+      THREE.MathUtils.degToRad(normalizedRot.y),
+      THREE.MathUtils.degToRad(normalizedRot.z),
+      'YXZ'
+      );
+      normalizedQuat.setFromEuler(normalizedEuler);
+      let localOffset = new THREE.Vector3(0, 0, 0);
+      if (posOffset) {localOffset.set(posOffset.x || 0, posOffset.y || 0, posOffset.z || 0);}
+      localOffset.applyQuaternion(normalizedQuat);
+      const finalPosition = normalizedPos.clone().add(localOffset);
+      obj.position.copy(finalPosition);
+      let finalQuat = normalizedQuat.clone();
+      if (rotOffset) {
+      const offsetEuler = new THREE.Euler(
+          THREE.MathUtils.degToRad(rotOffset.x || 0),
+          THREE.MathUtils.degToRad(rotOffset.y || 0),
+          THREE.MathUtils.degToRad(rotOffset.z || 0),
+          'YXZ'
+      );
+      const offsetQuat = new THREE.Quaternion().setFromEuler(offsetEuler);
+      finalQuat.multiply(offsetQuat);
+      }
+      obj.quaternion.copy(finalQuat);
+      let scaleX = baseScale?.x || 1;
+      let scaleY = baseScale?.y || 1;
+      let scaleZ = baseScale?.z || 1;
+      if (scaleOff) {
+      scaleX *= (scaleOff.x || 1);
+      scaleY *= (scaleOff.y || 1);
+      scaleZ *= (scaleOff.z || 1);
+      }
+      obj.scale.set(
+      glbScale.x * scaleX,
+      glbScale.y * scaleY,
+      glbScale.z * scaleZ
+      );
+      }
+      async function processPrefab(prefab, index) {
+      const pos = prefab.position || prefab.Position || prefab.pos || prefab.Postion;
+      if (!pos) {return;}
+      const unityX = pos[0] !== undefined ? pos[0] : (pos.x || 0);
+      const unityY = pos[1] !== undefined ? pos[1] : (pos.y || 0);
+      const unityZ = pos[2] !== undefined ? pos[2] : (pos.z || 0);
+      const rot = prefab.rotation || prefab.Rotation || prefab.rot || { x: 0, y: 0, z: 0 };
+      const unityRot = {
+      x: rot[0] !== undefined ? rot[0] : (rot.x || 0),
+      y: rot[1] !== undefined ? rot[1] : (rot.y || 0),
+      z: rot[2] !== undefined ? rot[2] : (rot.z || 0)
+      };
+      const scaleData = prefab.scale || prefab.Scale || { x: 1, y: 1, z: 1 };
+      const baseScale = {
+      x: scaleData[0] !== undefined ? scaleData[0] : (scaleData.x || 1),
+      y: scaleData[1] !== undefined ? scaleData[1] : (scaleData.y || 1),
+      z: scaleData[2] !== undefined ? scaleData[2] : (scaleData.z || 1)
+      };
+      const prefabName = prefab.Name || 'Unknown';
+      const shouldSkipModel = prefabName.includes('cave_') || prefabName.includes('swamp_') || prefabName.includes('ice_lake') || prefabName.includes('water_well') || prefabName.includes('ue_jungle_swamp') || prefabName.includes('ue_lake') || prefabName.includes('ue_oasis') || prefabName.includes('ue_canyon');
+      if (shouldSkipModel) {
+      const unityX = pos[0] !== undefined ? pos[0] : (pos.x || 0);
+      const unityY = pos[1] !== undefined ? pos[1] : (pos.y || 0);
+      const unityZ = pos[2] !== undefined ? pos[2] : (pos.z || 0);
+      const markerPos = transformPositionFromUnity(unityX, unityY, unityZ);
+      createCubeMarker(prefabName, markerPos.x, markerPos.y, markerPos.z);
+      return;
+      }
+      const modelUrl = window.location.origin + '/Models/' + prefabName + '.glb';
+      let offsets;
+      try {
+      offsets = await loadPrefabOffset(prefabName);
+      } catch (err) {
+      console.error(`Failed to load offsets for ${prefabName}, using defaults.`, err);
+      offsets = {
+          positionOffset: { x: 0, y: 0, z: 0 },
+          rotationOffset: { x: 0, y: 0, z: 0 },
+          scaleMultiplier: { x: 1, y: 1, z: 1 }
+      };
+      }
+      if (loadedGLBModels[modelUrl]) {
+      const cached = loadedGLBModels[modelUrl];
+      const model = cached.scene.clone();
+      applyTransformWithLocalOffsets(model, unityX, unityY, unityZ, unityRot, baseScale, offsets);
+      scene.add(model);
+      prefabMarkers.push(model);
+      collectCollisionMeshes(model, prefabMarkers);
+      addPrefabLabel(prefabName, model.position.x, model.position.y, model.position.z);
+      return;
+      }
+      loadGLBModel(
+      modelUrl,
+      (gltf) => {
+          const model = gltf.scene;
+          const box = new THREE.Box3().setFromObject(model);
+          const modelHeight = box.max.y - box.min.y;
+          const bottomOffset = -box.min.y;
+          loadedGLBModels[modelUrl] = {scene: model,bottomOffset: bottomOffset};
+          const clonedModel = model.clone();
+          applyTransformWithLocalOffsets(clonedModel, unityX, unityY, unityZ, unityRot, baseScale, offsets);
+          scene.add(clonedModel);
+          prefabMarkers.push(clonedModel);
+          collectCollisionMeshes(clonedModel, prefabMarkers);
+          addPrefabLabel(prefabName, clonedModel.position.x, clonedModel.position.y, clonedModel.position.z);
+      },
+      (err) => {
+          const markerPos = transformPositionFromUnity(unityX, unityY, unityZ);
+          createCubeMarker(prefabName, markerPos.x, markerPos.y, markerPos.z);
+      }
+      );
+      }
+      function addPrefabLabel(name, x, y, z, modelHeight = 10) {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = 512; canvas.height = 128;
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+      ctx.fillRect(0, 0, 512, 128);
+      ctx.fillStyle = '#00ff00';
+      ctx.font = 'bold 32px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText(name, 256, 64);
+      const texture = new THREE.CanvasTexture(canvas);
+      const spriteMat = new THREE.SpriteMaterial({
+      map: texture,
+      depthTest: false,
+      sizeAttenuation: true
+      });
+      const sprite = new THREE.Sprite(spriteMat);
+      sprite.position.set(x, y + modelHeight + 5, z);
+      sprite.scale.set(80, 20, 1);
+      scene.add(sprite);
+      prefabMarkers.push(sprite);
+      }
+      function createCubeMarker(name, x, y, z) {
+      const markerGeo = new THREE.BoxGeometry(5, 5, 5);
+      const markerMat = new THREE.MeshBasicMaterial({ color: 0xff6600, opacity: 0.9, transparent: true });
+      const marker = new THREE.Mesh(markerGeo, markerMat);
+      marker.position.set(x, y, z);
+      scene.add(marker);
+      prefabMarkers.push(marker);
+      addPrefabLabel(name, x, y, z);
+      }
+      async function drawPrefabs(prefabsData) {
+      if (!prefabsData || prefabsData.length === 0) return;
+      initGLTFLoader();
+      function getCPUScore() {
+          const start = performance.now();
+          let x = 0;
+          for (let i = 0; i < 2000000; i++) {x += Math.sqrt(i) * Math.sin(i);}
+          const end = performance.now();
+          return end - start;
+      }
+      const cpuTime = getCPUScore();
+      const clampedTime = Math.max(10, Math.min(100, cpuTime));
+      const cpuPerf = 250 + (clampedTime - 15) * (100 - 250) / (100 - 15);
+      log(`CPU Benchmarked at: ${cpuTime}ms. Setting max prefabs to ${cpuPerf.toFixed(0)}`);
+      const maxPrefabs = Math.min(prefabsData.length, cpuPerf);
+      let bbMarkerCount = 0;
+      for (let i = 0; i < maxPrefabs; i++) {
+      const prefab = prefabsData[i];
+      const prefabName = prefab.Name || 'Unknown';
+      if (isBBMarkerType(prefabName)) {
+          createBBMarkerFromPrefab(prefab);
+          bbMarkerCount++;
+      }
+          processPrefab(prefab, i);
+      }
+      if (bbMarkerCount > 0) {log(`Created ${bbMarkerCount} BB markers from prefabs`);}
+      if (prefabsData.length > maxPrefabs) {log(`Showing ${maxPrefabs} of ${prefabsData.length} prefabs (limited for performance)`, 'info');}
+      log(`Processing ${maxPrefabs} prefabs...`, 'success');
+      }
+      function createDemoTerrain() {
+      log('Generating BMGJET Demo');
+      const res = SEGMENTS + 1;
+      const geometry = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, SEGMENTS, SEGMENTS);
+      const vertices = geometry.attributes.position.array;
+      const colors = new Float32Array(vertices.length);
+      const canvas = document.createElement('canvas');
+      canvas.width = res;
+      canvas.height = res;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'black';
+      ctx.fillRect(0, 0, res, res);
+      ctx.fillStyle = 'white';
+      ctx.font = `bold ${res * 0.15}px Arial`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('BMGJET', res / 2, res / 2);
+      const imageData = ctx.getImageData(0, 0, res, res).data;
+      const waterColor = [0.169, 0.317, 0.362];
+      const sandColor  = [0.7, 0.659, 0.527];
+      for (let i = 0; i < vertices.length / 3; i++) {
+      const x = i % res;
+      const y = Math.floor(i / res);
+      const pixelIndex = (y * res + x) * 4;
+      const isLand = imageData[pixelIndex] > 128;
+      const h = isLand ? 20 : -50;
+      vertices[i * 3 + 2] = h * (window.HEIGHT_SCALE || 1.0);
+      const activeColor = isLand ? sandColor : waterColor;
+      colors[i * 3 + 0] = activeColor[0];
+      colors[i * 3 + 1] = activeColor[1];
+      colors[i * 3 + 2] = activeColor[2];
+      }
+      geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      geometry.computeVertexNormals();
+      const material = new THREE.MeshLambertMaterial({ vertexColors: true });
+      if (terrain) scene.remove(terrain);
+      terrain = new THREE.Mesh(geometry, material);
+      terrain.rotation.x = -Math.PI / 2;
+      scene.add(terrain);
+      collisionMeshes.push(terrain);
+      }
+      function setupControls() {
+          document.addEventListener('keydown', (e) => {
+              switch(e.code) {
+                  case 'KeyW': keys.w = true; break;
+                  case 'KeyA': keys.a = true; break;
+                  case 'KeyS': keys.s = true; break;
+                  case 'KeyD': keys.d = true; break;
+                  case 'ShiftLeft': case 'ShiftRight': keys.shift = true; break;
+                  case 'Space':
+                      keys.space = true;
+                      if (noClipMode && isGrounded) {
+                          playerVelocity.y = noClipSettings.jumpHeight;
+                          isGrounded = false;
+                      }
+                      e.preventDefault();
+                      break;
+                 case 'KeyC': case 'ControlLeft': case 'ControlRight':
+                      keys.c = true;
+                      if (noClipMode) {isDucking = true;}
+                      e.preventDefault();
+                      break;
+              }
+          });
+          document.addEventListener('keyup', (e) => {
+              switch(e.code) {
+                  case 'KeyW': keys.w = false; break;
+                  case 'KeyA': keys.a = false; break;
+                  case 'KeyS': keys.s = false; break;
+                  case 'KeyD': keys.d = false; break;
+                  case 'ShiftLeft': case 'ShiftRight': keys.shift = false; break;
+                  case 'Space': keys.space = false; break;
+                  case 'KeyC' : case 'ControlLeft': case 'ControlRight':
+                      keys.c = false;
+                      isDucking = false;
+                      break;
+              }
+          });
+          document.addEventListener('click', () => renderer.domElement.requestPointerLock());
+          document.addEventListener('pointerlockchange', () => {isPointerLocked = document.pointerLockElement === renderer.domElement;});
+          document.addEventListener('mousemove', (e) => {
+              if (!isPointerLocked) return;
+              euler.setFromQuaternion(camera.quaternion);
+              euler.y -= e.movementX * lookSpeed;
+              euler.x -= e.movementY * lookSpeed;
+              euler.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, euler.x));
+              camera.quaternion.setFromEuler(euler);
+          });
+          window.addEventListener('resize', () => {
+              camera.aspect = window.innerWidth / window.innerHeight;
+              camera.updateProjectionMatrix();
+              renderer.setSize(window.innerWidth, window.innerHeight);
+          });
+      }
+      function updateMovement(delta) {
+          let moveX = 0;
+          let moveZ = 0;
+          let currentSpeed = moveSpeed;
+          if (noClipMode) {
+              const isRunning = keys.shift;
+              moveZ = Number(keys.w) - Number(keys.s);
+              moveX = Number(keys.d) - Number(keys.a);
+              currentSpeed = isRunning ? noClipSettings.runSpeed : noClipSettings.walkSpeed;
+              baseCameraY = isDucking ? noClipSettings.duckHeight : noClipSettings.eyeHeight;
+              const targetGroundHeight = getGroundHeightAt(camera.position.x, camera.position.z) + baseCameraY;
+              const feetPosition = camera.position.y - baseCameraY;
+              if (!isGrounded) {playerVelocity.y -= noClipSettings.gravity * delta;}
+              camera.position.y += playerVelocity.y * delta;
+              const currentFeetPos = camera.position.y - baseCameraY;
+              if (camera.position.y - baseCameraY <= targetGroundHeight) {
+                  camera.position.y = targetGroundHeight + baseCameraY;
+                  playerVelocity.y = 0;
+                  isGrounded = true;
+              } else if (currentFeetPos > targetGroundHeight) {isGrounded = false;}
+              if (moveX !== 0 || moveZ !== 0) {
+                  const speed = currentSpeed * delta;
+                  const forward = new THREE.Vector3();
+                  const right = new THREE.Vector3();
+                  camera.getWorldDirection(forward);
+                  forward.normalize();
+                  right.crossVectors(forward, new THREE.Vector3(0, 1, 0));
+                  const movement = new THREE.Vector3();
+                  movement.addScaledVector(right, moveX * speed);
+                  movement.addScaledVector(forward, moveZ * speed);
+                  camera.position.add(movement);
+              }
+          } else {
+              if (isMobile && joystickActive) {
+                  moveX = joystickDeltaX;
+                  moveZ = -joystickDeltaY;
+                  currentSpeed = moveSpeed * mobileSpeedMultiplier;
+              }
+              if (!isMobile) {
+                  if (!isPointerLocked && joystickDeltaX === 0 && joystickDeltaY === 0) {return;}
+                  moveZ = Number(keys.w) - Number(keys.s);
+                  moveX = Number(keys.d) - Number(keys.a);
+                  currentSpeed = keys.shift ? moveSpeed * 6 : moveSpeed;
+              }
+              if (moveX !== 0 || moveZ !== 0) {
+                  const speed = currentSpeed * delta;
+                  const forward = new THREE.Vector3();
+                  const right = new THREE.Vector3();
+                  camera.getWorldDirection(forward);
+                  forward.normalize();
+                  right.crossVectors(forward, new THREE.Vector3(0, 1, 0));
+                  const movement = new THREE.Vector3();
+                  movement.addScaledVector(right, moveX * speed);
+                  movement.addScaledVector(forward, moveZ * speed);
+                  camera.position.add(movement);
+              }
+          }
+          const x = (camera.position.x).toFixed(0);
+          const y = camera.position.y.toFixed(0);
+          const z = (camera.position.z * -1).toFixed(0);
+          document.getElementById('pos-display').textContent = `${x}, ${y}, ${z}`;
+      }
+      function updateRotationDisplay() {
+          const euler = new THREE.Euler().setFromQuaternion(camera.quaternion, 'YXZ');
+          const x = THREE.MathUtils.radToDeg(euler.x);
+          const y = THREE.MathUtils.radToDeg(euler.y);
+          const z = THREE.MathUtils.radToDeg(euler.z);
+          document.getElementById('rot-display').textContent = `${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`;
+      }
+      let lastTime = performance.now();
+      function animate() {
+          requestAnimationFrame(animate);
+          const delta = (performance.now() - lastTime) / 1000;
+          lastTime = performance.now();
+          updateMovement(delta);
+          updateRotationDisplay();
+          renderer.render(scene, camera);
+      }
+      if (isMobile) {
+          const debugLabel = document.querySelector('#layer-toggle label input#showDebug')?.parentElement;
+          if (debugLabel) debugLabel.style.display = 'none';
+      }
+      init();
     </script>
-</body>
+  </body>
 </html>
 ";
     #endregion
