@@ -53,12 +53,8 @@ Into your servers:
 HarmonyMods
 folder
 
-MapGenny.dll can be found in bin/Release
-
-Some sample Ai generated models can be downloaded from here<br>
-https://mega.nz/file/CaQQRBhL#9FfHm0dAppwimdpc7F8I1iQUc9pAI0I9CEHSyP4yr6w
-<br>Extract them into a "Models" folder in the root of the rust server.
-
+MapGenny.dll can be found in bin/Release<br>
+[⬇️ Download Release Build](https://github.com/bmgjet/MapGenny/raw/refs/heads/main/bin/Release/MapGenny.dll)
 --------------------------------------------------
 Running the Server
 --------------------------------------------------
