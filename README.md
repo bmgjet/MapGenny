@@ -1,273 +1,202 @@
+# MapGenny – Rust Map Generation System
 
-MapGenny – Rust Map Generation System
-=====================================
-
-Author:
-bmgjet
-
-Project Overview:
------------------
-MapGenny is a server-side map generation system designed for the game Rust.
-
-It runs as a Harmony mod and provides a web-based interface for generating,
-processing, Rust map files and optional custom prefabs.
+![Rust](https://img.shields.io/badge/Game-Rust-FF6B35?style=for-the-badge)<br>
+![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-2ED573?style=for-the-badge)<br>
+A server-side map generation system for [Rust](https://store.steampowered.com/app/252490/Rust/) that runs as a Harmony mod with a web-based interface for generating, processing, and customizing maps.
 
 ![Screenshot](https://raw.githubusercontent.com/bmgjet/MapGenny/refs/heads/main/screenshot.jpg)
 
---------------------------------------------------
-Tested Platforms
---------------------------------------------------
-- Windows 10 / 11
-- Ubuntu 22.04
-- Debian 12
+## Features
 
---------------------------------------------------
-Minimum Requirements
---------------------------------------------------
-CPU:
-- 2 cores minimum
-- More cores help slightly, but most logic is single-threaded
+- **Web-Based Interface** – Intuitive UI for map generation and configuration
+- **Custom Prefabs** – Import and integrate custom prefab templates
+- **Heightmap Support** – Generate terrain from custom heightmaps
+- **3D Preview** – Visual preview of generated maps
+- **Prefab Breaker** – Advanced prefab manipulation tools
+- **PNG to Cubes** – Convert images to prefab cubes
+- **Batch Processing** – Queue multiple generation jobs via zip uploads
 
-Memory:
-- 4 GB RAM minimum
-- 6 GB+ recommended
+## Requirements
 
-Storage:
-- 20 GB SSD recommended
+### Supported Platforms
+| Operating System | Version |
+|-----------------|---------|
+| Windows | 10 / 11 |
+| Ubuntu | 22.04 |
+| Debian | 12 |
 
---------------------------------------------------
-Prerequisites
---------------------------------------------------
+### Hardware Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| CPU | 2 cores | 4+ cores |
+| RAM | 4 GB | 6 GB+ |
+| Storage | 20 GB SSD | 50 GB SSD |
+
+### Prerequisites
 - Vanilla Rust Dedicated Server
-- Installed via SteamCMD
 
---------------------------------------------------
-Installation
---------------------------------------------------
-1. Install MapGenny
--------------------
-Place:
-MapGenny.dll
+## Demo Videos
 
-Into your servers:
-HarmonyMods
-folder
+| Installer | Prefab Breaker | PNG2Cube |
+|:---------:|:--------------:|:--------:|
+| [![Installer](https://img.youtube.com/vi/txoHktoal34/mqdefault.jpg)](https://www.youtube.com/watch?v=txoHktoal34) | [![Prefab Breaker](https://img.youtube.com/vi/o9HUak9pUcg/mqdefault.jpg)](https://www.youtube.com/watch?v=o9HUak9pUcg) | [![PNG2Cube](https://img.youtube.com/vi/4E5gPP9nND8/mqdefault.jpg)](https://www.youtube.com/watch?v=4E5gPP9nND8) |
+| How To Setup Jobs | Custom Prefabs Swaps | Custom Prefabs Advanced |
+| ![Coming Soon](https://placehold.co/200x200/222/white/png?text=Coming+Soon) | ![Coming Soon](https://placehold.co/200x200/222/white/png?text=Coming+Soon) | ![Coming Soon](https://placehold.co/200x200/222/white/png?text=Coming+Soon) |
 
-MapGenny.dll can be found in bin/Release<br>
-[⬇️ Download Release Build](https://github.com/bmgjet/MapGenny/raw/refs/heads/main/bin/Release/MapGenny.dll)
---------------------------------------------------
-Running the Server
---------------------------------------------------
 
-2. Local Machine
-----------------
-Run:
-RustDedicated.exe
+## Installation
 
-If the server binds to localhost, MapGenny will attempt to automatically
-open a web browser to the interface.
+### Quick Start (Recommended)
 
---------------------------------------------------
+1. Download the installer scripts from the [latest release](https://github.com/bmgjet/MapGenny/releases/tag/Installer)
+2. Run the installer for your system:
+   - `.bat` for Windows
+   - `.sh` for Linux
+3. Start the server using the run script for your platform
 
-3. Remote Machine
------------------
-To expose the server remotely, specify an IP and port:
+### Manual Installation
 
-Required parameters:
-+server.ip
-+server.port
-+rcon.password
+1. Download `MapGenny.dll` from [bin/Release](https://github.com/bmgjet/MapGenny/raw/refs/heads/main/bin/Release/MapGenny.dll)
 
-IMPORTANT:
-Always set an RCON password or anyone could shut the server down.
+2. Place `MapGenny.dll` in your server's `HarmonyMods` folder
 
------------------------------------
-Windows (start.bat example)
------------------------------------
+3. Start your Rust Dedicated Server
 
-RustDedicated.exe ^
-+server.ip * ^
-+server.port 28016 ^
-+rcon.password "YourPassWordHere" ^
--logfile "logs.log"
+### Linux Setup
 
-Notes:
-- "*" means listen on all IP addresses
-- Replace "YourPassWordHere" with your own password
-- -logfile sets a custom log file location
+Install required GDI libraries:
 
------------------------------------
-Linux (start.sh)
------------------------------------
-If start.sh or start.bat exists, the server will reuse it on restart,
-even if originally launched in local mode.
-
---------------------------------------------------
-Server Notes
---------------------------------------------------
-- If +server.ip is not specified, the server defaults to localhost
-- Multiple interfaces can be bound using "/"
-  Example:
-  +server.ip 127.0.0.1/192.168.0.1
-- On Linux, you must bind two addresses to open remotely
-  Example:
-  0.0.0.0/+
-- Uploads can be disabled:
-  +allowuploads false
-- Job uploads can be disabled:
-  +allowjobs false
-- png2cubes can be disabled:
-  +allowcubes false
-- Only run png2cubes mode:
-  +cubesonly true 
-- 3D View can be disabled:
-  +allow3d false
-
-Advertisement markup support:
-<size=8></size>  (default scale is 8)
-<br>             (line break)
-
---------------------------------------------------
-Linux Requirements (Ubuntu 22.04 / Debian 12)
---------------------------------------------------
-MapGenny requires GDI libraries on Linux.
-
-Install dependencies:
+```bash
 sudo apt install -y libgdiplus libc6-dev
+```
 
-Startup script example:
+Set environment variables before launching:
 
+```bash
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)
+export SYSTEM_DRAWING_ALLOW_SYSTEM_GDI_UNIX=1
+```
+
+## Configuration
+
+### Server Parameters
+
+| Parameter | Description | Required |
+|-----------|-------------|----------|
+| `+server.ip` | Server bind address | Yes (remote) |
+| `+server.port` | Server port | Yes |
+| `+rcon.password` | RCON password | **Yes** (security) |
+
+### Startup Examples
+
+**Windows** (`start.bat`):
+```batch
+RustDedicated.exe ^
+  +server.ip * ^
+  +server.port 28016 ^
+  +rcon.password "YourPassWordHere" ^
+  -logfile "logs.log"
+```
+
+**Linux** (`start.sh`):
+```bash
 #!/bin/sh
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$(pwd)
 export SYSTEM_DRAWING_ALLOW_SYSTEM_GDI_UNIX=1
 cd "$(dirname "$0")"
 ./RustDedicated \
-+server.ip 0.0.0.0/+ \
-+server.port 28016 \
-+rcon.password "YourPassWordHere"
+  +server.ip 0.0.0.0/+ \
+  +server.port 28016 \
+  +rcon.password "YourPassWordHere"
+```
 
---------------------------------------------------
-Custom Prefabs
---------------------------------------------------
-Custom Prefab Template:
-Run the debug version of MapGenny.dll
-Then generate a map instead of loading custom prefabs it will dump the folder for all the templates that your current map would of used.
+> **Security Note:** Always set an RCON password. Without it, anyone can shut down your server.
 
---------------------------------------------------
-Jobs Zip Layout
---------------------------------------------------
-Example Jobs (NZ / Australia maps):
-https://mega.nz/file/6fY23QpS#bvx4yqBOXEIJW7W11J0XfNZpGRVtoqG4eIz2wO0uQOo
+### Optional Parameters
 
-Zip Layout:
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `+allowuploads` | `true` | Enable/disable file uploads |
+| `+allowjobs` | `true` | Enable/disable job queue |
+| `+allowcubes` | `true` | Enable/disable png2cubes |
+| `+cubesonly` | `false` | Run in cubes-only mode |
+| `+allow3d` | `true` | Enable/disable 3D preview |
+| `+allowbreakprefab` | `true` | Enable/disable prefab breaker |
 
-ZipFile
- └─ Folder
-     ├─ job.json
-     ├─ height.png            (optional)
-     ├─ customprefabs.zip     (optional)
+### Network Configuration
 
- └─ Folder2
-     └─ job.json
+- **Local Mode:** If `+server.ip` is not specified, MapGenny auto-opens the web interface and enables all functions.
+- **Remote Mode:** If `+server.ip and +server.port` are specified, MapGenny will run in remote mode. Some features disabled by default.
+- **Multiple Interfaces:** Bind multiple IPs using `/` (e.g., `127.0.0.1/192.168.0.1`)
+- **Linux Remote:** Bind two addresses to open remotely (e.g., `0.0.0.0/+`)
 
---------------------------------------------------
-job.json
---------------------------------------------------
-- Generated using the "Export JSON" button on the main generation page
-- Uses the active settings from the UI
-- If using a custom heightmap or prefabs, they must be placed in the same folder
-- Filenames must match exactly
-- Folder names may be anything (no spaces recommended)
+## Custom Prefabs
 
-The server will continue processing each job until:
-- The job completes
-- The stop and delete button is pressed
+To create a custom prefab template:
 
-Large zip files may take time to upload depending on your internet speed.
+1. Run the **debug version** of MapGenny.dll from [bin/Debug](https://github.com/bmgjet/MapGenny/raw/refs/heads/main/bin/Debug/MapGenny.dll)
+2. Generate a map (instead of loading custom prefabs it will save all templates that were found on that map.)
 
+## Batch Processing (Jobs Zip)
 
-END USER LICENSE AGREEMENT (EULA)
-========================================
+### Zip Structure
 
-Copyright (c) bmgjet
-All rights reserved.
+```
+ZipFile.zip
+└── FolderName
+    ├── job.json           (required)
+    ├── height.png         (optional)
+    └── customprefabs.zip   (optional)
+```
 
-IMPORTANT:
-----------
-By using, copying, modifying, or distributing this software, you agree to
-the terms of this End User License Agreement ("EULA").
+### Example
 
-If you do not agree, do not use this software.
+Download [example jobs (NZ/Australia maps)](https://mega.nz/file/6fY23QpS#bvx4yqBOXEIJW7W11J0XfNZpGRVtoqG4eIz2wO0uQOo) for reference.
 
-1. DEFINITIONS
---------------
-"Software" refers to all source code, binaries, scripts, assets, and any
-associated materials contained in this repository.
+### job.json
 
-"Output" refers to anything generated, compiled, rendered, or produced
-using the Software.
+- Generated via the "Export JSON" button in the web interface
+- Uses active settings from the UI
+- Custom heightmaps/prefabs must be in the same folder
+- Folder names should avoid spaces
 
-"Commercial Use" means any use that generates revenue, monetary gain,
-subscriptions, donations, paid access, or is part of a paid product or service.
+The server processes jobs sequentially until stopped or deleted.
 
-2. GRANT OF LICENSE
--------------------
-bmgjet grants you a limited, non-exclusive, non-transferable, revocable
-license to use the Software for NON-COMMERCIAL purposes only.
+## Advertisement Markup
 
-3. PERMITTED USE
-----------------
-You MAY:
-- Modify the Software to improve functionality
-- Add features
-- Fix bugs
-- Refactor or optimize the code
+Support for custom text formatting:
 
-Provided that:
-- All original copyright notices remain intact
-- Attribution to bmgjet is preserved in all source files
-- Changes are submitted to bmgjet
+| Tag | Description |
+|-----|-------------|
+| `<size=8></size>` | Text size (default: 8) |
+| `<br>` | Line break |
 
-4. PROHIBITED USE
------------------
-You MAY NOT:
-- Use the Software in any paid or commercial project
-- Sell, license, rent, or monetize the Software
-- Sell, license, or monetize any Output generated by the Software
-- Remove or alter copyright notices
-- Claim ownership of the original Software
+## License
 
-5. COMMERCIAL LICENSING
-----------------------
-Commercial use of the Software or its Output is ONLY permitted if:
+Copyright (c) bmgjet. All rights reserved.
 
-1. Prior approval is obtained from bmgjet
-2. A revenue share agreement is accepted
-3. 20% of ALL gross profits derived from the Software or its Output
-   are paid to bmgjet
+### Grant of License
+You are granted a limited, non-exclusive, non-transferable, revocable license to use this software for **non-commercial purposes only**.
 
-Failure to meet these conditions voids any permission to use the Software.
+### Permitted Use
+- Modify and improve the software
+- Add features or fix bugs
+- Refactor or optimize code
 
-6. OWNERSHIP
-------------
-The Software is owned by bmgjet.
-All modifications remain subject to this EULA.
+**Conditions:**
+- Original copyright notices must remain intact
+- Attribution to bmgjet must be preserved
+- Changes should be submitted back
 
-7. NO WARRANTY
---------------
-The Software is provided "AS IS", without warranty of any kind, express or implied,
-including but not limited to merchantability or fitness for a particular purpose.
+### Prohibited Use
+- Commercial use or monetization
+- Selling, licensing, or renting the software
+- Claiming ownership of the original work
+- Removing copyright notices
 
-8. LIMITATION OF LIABILITY
---------------------------
-In no event shall bmgjet be liable for any damages arising from the use or
-inability to use the Software or its Output.
-
-9. TERMINATION
---------------
-This license is automatically terminated if you violate any term of this EULA.
-Upon termination, you must cease all use of the Software and destroy all copies.
-
-10. GOVERNING LAW
------------------
-This EULA shall be governed by applicable laws as determined by the licensor.
+### Commercial Licensing
+For commercial use, contact bmgjet for:
+1. Prior approval
+2. Revenue share agreement
+3. 20% of gross profits from map and/or resources created by this software.
