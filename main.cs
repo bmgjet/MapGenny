@@ -1395,10 +1395,18 @@ Library.DeleteCustomPrefabs = false;
                         }
                     }
                 }
+                string StaticMapPath = Path.Combine("CustomPrefabs", "static.map");
+                if (File.Exists(StaticMapPath))
+                {
+                    WorldSerialization StaticMap = new WorldSerialization();
+                    StaticMap.Load(StaticMapPath);
+                    Library.StaticMapProcess(ref src, StaticMap); //Do terrain/splat/biome/topology/alpha/water modification
+                }
                 SrcField.SetValue(map, src);
                 timer.End();
             }
         }
+
 
         [HarmonyPatch(typeof(World), "InitSize", typeof(uint))] //Over-Ride 1000-6000 limit
         public static class World_InitSize
@@ -1446,6 +1454,7 @@ Library.DeleteCustomPrefabs = false;
             public static ManualResetEventSlim _continueEvent = new ManualResetEventSlim(false);
             public static uint PrefabBreakerID = 0;
             public static bool WaitingForBreaker = true;
+            public static List<int> modifiedIndexes = new List<int>();
 
             //http stuff
             private static HttpListener _listener;
@@ -2471,6 +2480,7 @@ Library.DeleteCustomPrefabs = false;
                     Console.WriteLine("[Found Static Map]");
                     WorldSerialization StaticMap = new WorldSerialization();
                     StaticMap.Load(StaticMapPath); //Load static.map
+                    int heightRes = TerrainGenerator.GetHeightMapRes();
                     //Copy all rustedit data out of it
                     var customPrefab = new CustomPrefab
                     {
@@ -2488,7 +2498,59 @@ Library.DeleteCustomPrefabs = false;
                     };
                     if (customPrefab.MapPassword != null) { PasswordFromStaticMap = customPrefab.MapPassword; Console.WriteLine("[Copied Password]"); }
                     CustomMapPrefabs.Add(1, customPrefab); //Add to list of custom prefabs to be replaced.
-                    StaticMapProcess(StaticMap); //Do terrain/splat/biome/topology/alpha/water modification
+                    if (modifiedIndexes.Count == 0) { return; }
+                    var mapNames = new[] { "alpha", "biome", "splat", "topology", "water" };
+                    foreach (var name in mapNames)
+                    {
+                        byte[] staticData = StaticMap.GetMap(name)?.data;
+                        var worldMapData = World.GetMap(name);
+                        byte[] worldData = worldMapData;
+                        if (staticData == null || worldData == null) { continue; }
+                        int bytestep = GetStepSize(name);
+                        bool isPlanar = (name == "splat" || name == "biome"); //we calculate res based on ONE channel
+                        int staticRes = isPlanar ? (int)Math.Sqrt(staticData.Length / bytestep) : (int)Math.Sqrt(staticData.Length / (bytestep == 0 ? 1 : bytestep));
+                        int worldRes = isPlanar ? (int)Math.Sqrt(worldData.Length / bytestep) : (int)Math.Sqrt(worldData.Length / (bytestep == 0 ? 1 : bytestep));
+                        foreach (int i in modifiedIndexes)
+                        {
+                            int hX = i % heightRes;
+                            int hZ = i / heightRes;
+                            float nX = (float)hX / (heightRes - 1);
+                            float nZ = (float)hZ / (heightRes - 1);
+                            int sX = (int)(nX * (staticRes - 1));
+                            int sZ = (int)(nZ * (staticRes - 1));
+                            int wX = (int)(nX * (worldRes - 1));
+                            int wZ = (int)(nZ * (worldRes - 1));
+                            if (isPlanar)
+                            {
+                                for (int ch = 0; ch < bytestep; ch++)
+                                {
+                                    int sIdx = (ch * staticRes + sZ) * staticRes + sX;
+                                    int wIdx = (ch * worldRes + wZ) * worldRes + wX;
+                                    if (sIdx < staticData.Length && wIdx < worldData.Length){ worldData[wIdx] = staticData[sIdx]; }
+                                }
+                            }
+                            else
+                            {
+                                int sIdx = (sZ * staticRes + sX) * bytestep;
+                                int wIdx = (wZ * worldRes + wX) * bytestep;
+                                if (sIdx + bytestep <= staticData.Length && wIdx + bytestep <= worldData.Length)
+                                {
+                                    for (int b = 0; b < bytestep; b++){worldData[wIdx + b] = staticData[sIdx + b];}
+                                }
+                            }
+                        }
+                        for (int j = World.Serialization.world.maps.Count - 1; j >= 0; j--)
+                        {
+                            if (World.Serialization.world.maps[j].name == name)
+                            {
+                                World.Serialization.world.maps.RemoveAt(j);
+                                break;
+                            }
+                        }
+                        World.AddMap(name, worldData);
+                        ApplyToTerrain(name, worldData);
+                        Console.WriteLine($"Saved {name} changes ({modifiedIndexes.Count} pixels synced)");
+                    }
                 }
 
                 //Replacement Custom Prefabs
@@ -2650,101 +2712,56 @@ Library.DeleteCustomPrefabs = false;
             public static float PrefabSize(char inputText)
             {
                 if (sizeMap.TryGetValue(inputText, out float prefabSize)) { return prefabSize; }
-                // Return 0 if no matching prefab is found
                 return 0.17f;
             }
 
-            public static void StaticMapProcess(WorldSerialization staticMap)
+            public static NativeArray<short> LoadHeightData(WorldSerialization staticMap)
             {
-                var maps = new[] { "alpha", "biome", "height", "terrain", "splat", "topology", "water" };
-                var dataDict = maps.ToDictionary(map => map, map => staticMap?.GetMap(map)?.data); //Store data from static.map
-                //Compare static map data verse orignal map
-                var applyFlags = maps.ToDictionary(map => map, map => true);
-                foreach (var map in maps)
+                byte[] heightdata = staticMap.GetMap("height").data;
+                int totalPixels = heightdata.Length / 2;
+                int heightRes = (int)Math.Sqrt(totalPixels);
+                NativeArray<short> staticmapheight = new NativeArray<short>(totalPixels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+                for (int i = 0; i < totalPixels; i++)
                 {
-                    var staticData = dataDict[map];
-                    var worldData = World.Serialization.GetMap(map)?.data;
-                    if (staticData?.Length != worldData?.Length) { applyFlags[map] = false; } //Maps resolutions dont match
+                    int byteIdx = i * 2;
+                    short h = (short)(heightdata[byteIdx] | (heightdata[byteIdx + 1] << 8));
+                    staticmapheight[i] = h;
                 }
-                Dictionary<string, byte[]> mapData = World.Serialization.world.maps.ToDictionary(md => md.name, md => md.data); //Store data from procgen map.
-                World.Serialization.world.maps.Clear(); //Clear procgen data
-                if (applyFlags["height"])
+                return staticmapheight;
+            }
+
+            public static void StaticMapProcess(ref NativeArray<short> height, WorldSerialization staticMap)
+            {
+                Console.WriteLine("Applying static.map layer data...");
+                NativeArray<short> staticHeightMap = LoadHeightData(staticMap);
+                int heightRes = (int)Math.Sqrt(staticHeightMap.Length);
+                if (staticHeightMap.Length != height.Length)
                 {
-                    var terrainIndexes = ApplyStaticHeight(dataDict["height"], mapData["height"], new List<int>(), "height"); //Do height modifications, Store indexes where its made modifications
-                    if (terrainIndexes.Count > 0)
+                    Console.WriteLine($"Height mismatch: {heightRes} != {(int)Math.Sqrt(height.Length)}");
+                    return;
+                }
+                modifiedIndexes.Clear();
+                for (int i = 0; i < staticHeightMap.Length; i++)
+                {
+                    if (staticHeightMap[i] > height[i])
                     {
-                        if (mapData.ContainsKey("terrain")) { ApplyStaticHeight(dataDict["terrain"], mapData["terrain"], new List<int>(), "terrain"); } //Correct terrain data
-                        if (mapData.ContainsKey("topology")) { CopyTopologyData(dataDict["topology"], mapData["topology"], GetStepSize("topology")); } //Merge topology data from static map
-                        foreach (var map in maps)
-                        {
-                            if (applyFlags[map] && map != "height" && map != "terrain" && map != "topology" && mapData.ContainsKey(map))
-                            {
-                                ApplyStaticData(dataDict[map], mapData[map], GetStepSize(map), map, terrainIndexes, dataDict["height"].Length); //Apply splat,biome,alpha,water only where terrain has been modified
-                            }
-                        }
+                        height[i] = staticHeightMap[i];
+                        modifiedIndexes.Add(i);
                     }
                 }
-                //Save any left over mapdata
-                foreach (var mapEntry in mapData)
-                {
-                    if (World.Serialization.GetMap(mapEntry.Key)?.name != null) { continue; } //Data already exsists
-                    World.AddMap(mapEntry.Key, mapEntry.Value);
-                }
             }
-
-            //Scale indexs for different resolutions
-            public static double ScaleValue(double value, double fromMin, double fromMax, double toMin, double toMax)
+          
+            private static void ApplyToTerrain(string mapName, byte[] mapData)
             {
-                if (fromMax == fromMin) return toMin;
-                double ratio = (value - fromMin) / (fromMax - fromMin);
-                return ratio * (toMax - toMin) + toMin;
-            }
-
-            public static List<int> ApplyStaticHeight(byte[] newBytes, byte[] originalBytes, List<int> moddedterrain, string type)
-            {
-                //Loop height and terrain data.
-                //Terrain data is 2 bytes to make a short value
-                for (int i = 0; i < newBytes.Length; i += 2)
+                if (mapData == null) return;
+                switch (mapName)
                 {
-                    //static.map terrain higher then original so apply
-                    if (BitConverter.ToUInt16(newBytes, i) > BitConverter.ToUInt16(originalBytes, i))
-                    {
-                        originalBytes[i] = newBytes[i];
-                        originalBytes[i + 1] = newBytes[i + 1];
-                        moddedterrain.Add(i); //Keep track of mods
-                    }
+                    case "alpha": TerrainMeta.AlphaMap.FromByteArray(mapData); break;
+                    case "biome": TerrainMeta.BiomeMap.FromByteArray(mapData); break;
+                    case "splat": TerrainMeta.SplatMap.FromByteArray(mapData); break;
+                    case "topology": TerrainMeta.TopologyMap.FromByteArray(mapData); break;
+                    case "water": TerrainMeta.WaterMap.FromByteArray(mapData); break;
                 }
-                World.AddMap(type, originalBytes);
-                return moddedterrain;
-            }
-
-            private static void ApplyStaticData(byte[] newBytes, byte[] originalBytes, int step, string mapType, List<int> terrainIndexes, int maxValue)
-            {
-                //Work out resolutions
-                int byteDepth = originalBytes.Length / step;
-                int newRes = (int)Math.Sqrt(byteDepth);
-                int heightRes = (int)Math.Sqrt(maxValue / 2);
-                //Loop only indexes that have had terrain modification
-                foreach (var tIndex in terrainIndexes)
-                {
-                    //Calculate difference in indexes for resolution missmatches
-                    int rowIndex = (int)ScaleValue((tIndex / 2) % heightRes, 0, heightRes, 0, newRes);
-                    int colIndex = (int)ScaleValue((tIndex / 2) / heightRes, 0, heightRes, 0, newRes);
-                    int index = rowIndex + newRes * colIndex;
-                    //Apply changes
-                    for (int i = 0; i < step; i++) { originalBytes[index + (byteDepth * i)] = newBytes[index + (byteDepth * i)]; }
-                }
-                World.AddMap(mapType, originalBytes);
-            }
-
-            private static void CopyTopologyData(byte[] newBytes, byte[] originalBytes, int step)
-            {
-                //Set topology to precgen map if there has been one set in the static.map
-                for (int i = 0; i <= newBytes.Length - step; i += step)
-                {
-                    if (BitConverter.ToUInt32(newBytes, i) != 0) { Array.Copy(newBytes, i, originalBytes, i, step); }
-                }
-                World.AddMap("topology", originalBytes);
             }
 
             private static int GetStepSize(string mapType)
@@ -2759,6 +2776,14 @@ Library.DeleteCustomPrefabs = false;
                     case "water": return 2; //2 bytes to make a short for water height (similar to terrain)
                     default: return 1;
                 }
+            }
+
+            //Scale indexs for different resolutions
+            public static double ScaleValue(double value, double fromMin, double fromMax, double toMin, double toMax)
+            {
+                if (fromMax == fromMin) return toMin;
+                double ratio = (value - fromMin) / (fromMax - fromMin);
+                return ratio * (toMax - toMin) + toMin;
             }
 
             public static void RustEditData(Dictionary<uint, CustomPrefab> CustomMapPrefabs, WorldSerialization ws, Vector3 MonumentCenter, Quaternion MonumentRotation, uint dataid)
@@ -8136,6 +8161,7 @@ function sendGET(inputValue) {
       <label><input type=""checkbox"" id=""showPrefabs"" checked> Prefabs</label>
       <label><input type=""checkbox"" id=""showWater"" checked> Water</label>
       <label><input type=""checkbox"" id=""showBB"" checked> PreventBuilding</label>
+      <label><input type=""checkbox"" id=""showLabels"" checked> Labels</label>
     </div>
     <div id=""controls"">
       <h3>Navigation Controls</h3>
@@ -8156,6 +8182,7 @@ function sendGET(inputValue) {
       const loadedGLBModels = {};
       let showDebug = false;
       let prefabMarkers = [];
+      let prefabLabels = [];
       let collisionMeshes = [];
       let BBMarkers = [];
       let isPointerLocked = false;
@@ -8177,6 +8204,7 @@ function sendGET(inputValue) {
       let showPrefabs = true;
       let showWater = true;
       let showBB = true;
+      let showLabels = true;
       let waterMesh = null;
       const CHECKBOX_STATE_KEY = 'mapViewer.layerStates';
       const prefabOffsetCache = new Map();
@@ -8351,6 +8379,7 @@ function sendGET(inputValue) {
       showPrefabs = applyCheckboxState('showPrefabs', true);
       showWater   = applyCheckboxState('showWater', true);
       showBB   = applyCheckboxState('showBB', true);
+      showLabels = applyCheckboxState('showLabels', true);
       showDebug   = applyCheckboxState('showDebug', false);
       setTimeout(() => {
           if (roadInstancer) roadInstancer.visible = showRoads;
@@ -8358,6 +8387,7 @@ function sendGET(inputValue) {
           if (riverInstancer) riverInstancer.visible = showWater;
           prefabMarkers.forEach(marker => marker.visible = showPrefabs);
           BBMarkers.forEach(marker => marker.visible = showBB);
+          prefabLabels.forEach(marker => marker.visible = showLabels);
           if (waterMesh) waterMesh.visible = showWater;
       }, 1000);
       const noclipBtn = document.getElementById('noclip-btn');
@@ -8539,6 +8569,10 @@ function sendGET(inputValue) {
       onLayerChange('showBB', (v) => {
       showBB = v;
       BBMarkers.forEach(m => m.visible = v);
+      });
+      onLayerChange('showLabels', (v) => {
+      showLabels = v;
+      prefabLabels.forEach(m => m.visible = v); 
       });
       onLayerChange('showWater', (v) => {
       showWater = v;
@@ -9167,7 +9201,7 @@ function sendGET(inputValue) {
       sprite.position.set(x, y + modelHeight + 5, z);
       sprite.scale.set(80, 20, 1);
       scene.add(sprite);
-      prefabMarkers.push(sprite);
+      prefabLabels.push(sprite);
       }
       function createCubeMarker(name, x, y, z) {
       const markerGeo = new THREE.BoxGeometry(5, 5, 5);
