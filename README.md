@@ -42,7 +42,7 @@ A server-side map generation system for [Rust](https://store.steampowered.com/ap
 |:---------:|:--------------:|:--------:|
 | [![Installer](https://img.youtube.com/vi/txoHktoal34/mqdefault.jpg)](https://www.youtube.com/watch?v=txoHktoal34) | [![Prefab Breaker](https://img.youtube.com/vi/o9HUak9pUcg/mqdefault.jpg)](https://www.youtube.com/watch?v=o9HUak9pUcg) | [![PNG2Cube](https://img.youtube.com/vi/4E5gPP9nND8/mqdefault.jpg)](https://www.youtube.com/watch?v=4E5gPP9nND8) |
 | Custom Prefabs Static Map | Custom Prefabs Monuments | Jobs Mode |
-| [![Static Map](https://img.youtube.com/vi/UKi5zy4JmnM/mqdefault.jpg)](https://www.youtube.com/watch?v=UKi5zy4JmnM) | [![Custom Monuments](https://img.youtube.com/vi/B_oPaRiBStE/mqdefault.jpg)](https://www.youtube.com/watch?v=B_oPaRiBStE) | [![Jobs](https://img.youtube.com/vi/J2WMoGUE8s/mqdefault.jpg)](https://www.youtube.com/watch?v=J2WMoGUE8s) |
+| [![Static Map](https://img.youtube.com/vi/UKi5zy4JmnM/mqdefault.jpg)](https://www.youtube.com/watch?v=UKi5zy4JmnM) | [![Custom Monuments](https://img.youtube.com/vi/B_oPaRiBStE/mqdefault.jpg)](https://www.youtube.com/watch?v=B_oPaRiBStE) | [![Jobs](https://img.youtube.com/vi/-J2WMoGUE8s/mqdefault.jpg)](https://www.youtube.com/watch?v=-J2WMoGUE8s) |
 
 
 ## Installation
