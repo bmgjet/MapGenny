@@ -36,7 +36,7 @@ using System.Collections;
 using Unity.Jobs;
 using Unity.Burst;
 using Newtonsoft.Json;
-using Rust;
+using System.Runtime.CompilerServices;
 
 namespace MapGenny
 {
@@ -745,8 +745,10 @@ namespace MapGenny
             }
 
             [HarmonyPostfix]
-            private static void Postfix(string fileName)
+            private static void Postfix(string fileName, WorldSerialization __instance)
             {
+
+
                 try
                 {
                     if (Library.png2cubes == true) { return; }
@@ -768,8 +770,12 @@ namespace MapGenny
                 Timing timer = new Timing("Image Generation");
                 Console.WriteLine("Rendering Map And Creating Download File.");
                 Console.WriteLine("Sever May Appear Frozen During This...");
-                var bytes = MapImageRenderer.Render(out int width, out int height, out UnityEngine.Color color, 1);
-                File.WriteAllBytes("preview.png", bytes);
+                var render = new MapRender(__instance.GetMap("splat").data, __instance.GetMap("topology").data);
+                var bytes = render.Render();
+                if (bytes != null && bytes.Length > 128)
+                {
+                    File.WriteAllBytes("preview.png", bytes);
+                }
                 Library._savedFilePath = fileName;
                 timer.End();
                 try
@@ -3083,7 +3089,7 @@ Library.DeleteCustomPrefabs = false;
                     try
                     {
                         Texture2D newTexture = new Texture2D(texture.width, texture.height);
-                        newTexture.LoadImage(File.ReadAllBytes(fullPath));
+                        newTexture.LoadRawTextureData(File.ReadAllBytes(fullPath));
                         return new TextureData(newTexture);
                     }
                     catch (Exception ex) { Console.WriteLine($"Error loading PNG: {ex.Message}"); }
@@ -4126,7 +4132,6 @@ Library.DeleteCustomPrefabs = false;
 
             private static async Task HandleBreakUpload(HttpListenerContext ctx)
             {
-                string DownloadURL = "";
                 try
                 {
                     if (!ctx.Request.ContentType?.StartsWith("multipart/form-data") ?? true)
@@ -4488,7 +4493,7 @@ Library.DeleteCustomPrefabs = false;
                     }
                     ctx.Response.OutputStream.Close();
                 }
-                catch (Exception ex)
+                catch
                 {
                     ctx.Response.StatusCode = 500;
                     ctx.Response.OutputStream.Close();
@@ -9424,3 +9429,201 @@ function sendGET(inputValue) {
 ";
     #endregion
 }
+#region Create Map Image
+public class MapRender
+{
+    public int splatres;
+    public byte[] Splat;
+    public int[] Topology;
+    public MapRender(byte[] splat, byte[] topology)
+    {
+        splatres = (int)Math.Sqrt(splat.Length / 8);
+        Splat = splat;
+        int[] t = new int[topology.Length];
+        Buffer.BlockCopy(topology, 0, t, 0, topology.Length);
+        Topology = t;
+    }
+    public Array2D<Color> output;
+    public struct Array2D<T>
+    {
+        private T[] _items;
+        private int _width;
+        private int _height;
+        public Array2D(T[] items, int width, int height)
+        {
+            _items = items;
+            _width = width;
+            _height = height;
+        }
+        public ref T this[int x, int y]
+        {
+            get
+            {
+                int num = Math.Max(0, Math.Min(x, _width - 1));
+                int num2 = Math.Max(0, Math.Min(y, _height - 1));
+                return ref _items[num2 * _width + num];
+            }
+        }
+    }
+    public int GetTopology(int x, int z) { return Topology[z * splatres + x]; }
+    public static float Byte2Float(int b) => b / 255f;
+    private static Dictionary<int, int> type2index = new Dictionary<int, int> { { 8, 3 }, { 16, 4 }, { 4, 2 }, { 1, 0 }, { 32, 5 }, { 64, 6 }, { 2, 1 }, { 128, 7 } };
+    public static int TypeToIndex(int id) => type2index[id];
+    public static int IndexToType(int idx) => 1 << idx;
+    public float GetSplat(int x, int z, int mask)
+    {
+        if (mask > 0 && (mask & (mask - 1)) == 0)
+            return Byte2Float(Splat[(TypeToIndex(mask) * splatres + z) * splatres + x]);
+        int sum = 0;
+        for (int i = 0; i < 8; i++)
+            if ((IndexToType(i) & mask) != 0)
+                sum += Splat[(i * splatres + z) * splatres + x];
+        return Math.Min(Byte2Float(sum), 1f);
+    }
+    public readonly struct Vec4
+    {
+        public readonly float x, y, z, w;
+        public Vec4(float x, float y, float z, float w = 1f) { this.x = x; this.y = y; this.z = z; this.w = w; }
+        public static Vec4 operator *(Vec4 v, float f) => new Vec4(v.x * f, v.y * f, v.z * f, v.w * f);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static Vec4 Lerp(Vec4 a, Vec4 b, float t) => new Vec4(
+            a.x + (b.x - a.x) * t,
+            a.y + (b.y - a.y) * t,
+            a.z + (b.z - a.z) * t,
+            a.w + (b.w - a.w) * t
+        );
+    }
+    public class Config
+    {
+        public Vec4 StartColor = new Vec4(0.28627452f, 0.27058825f, 0.24705884f, 1f);
+        public Vec4 OffShoreColor = new Vec4(0.04090196f, 0.22060032f, 0.27450982f, 1f);
+        public Vec4 GravelColor = new Vec4(0.25f, 0.24342105f, 0.22039475f, 1f);
+        public Vec4 DirtColor = new Vec4(0.6f, 0.47959462f, 0.33f, 1f);
+        public Vec4 SandColor = new Vec4(0.7f, 0.65968585f, 0.5277487f, 1f);
+        public Vec4 GrassColor = new Vec4(0.35486364f, 0.37f, 0.2035f, 1f);
+        public Vec4 ForestColor = new Vec4(0.24843751f, 0.3f, 0.0703125f, 1f);
+        public Vec4 RockColor = new Vec4(0.4f, 0.39379844f, 0.37519377f, 1f);
+        public Vec4 SnowColor = new Vec4(0.86274517f, 0.9294118f, 0.94117653f, 1f);
+        public Vec4 PebbleColor = new Vec4(0.13725491f, 0.2784314f, 0.2761563f, 1f);
+    }
+    [Flags]
+    public enum MapEnum
+    {
+        Ocean = 128,
+        Lake = 65536,
+        River = 16384,
+    }
+    public byte[] Render()
+    {
+        if (Topology == null || Splat == null) return null;
+        var config = new Config();
+        Color[] array = new Color[splatres * splatres];
+        output = new Array2D<Color>(array, splatres, splatres);
+        Parallel.For(0, splatres, x =>
+        {
+            float[] splatValues = new float[8];
+            for (int z = 0; z < splatres; z++)
+            {
+                Vec4 vector = config.StartColor;
+                MapEnum topology = (MapEnum)GetTopology(x, z);
+                bool ocean = (topology & MapEnum.Ocean) != 0;
+                if (ocean)
+                    vector = config.OffShoreColor;
+                else if ((topology & (MapEnum.Lake | MapEnum.River)) != 0)
+                    vector = Vec4.Lerp(vector, config.OffShoreColor, 1f);
+                else
+                {
+                    splatValues[0] = GetSplat(x, z, 128);
+                    splatValues[1] = GetSplat(x, z, 64);
+                    splatValues[2] = GetSplat(x, z, 8);
+                    splatValues[3] = GetSplat(x, z, 1);
+                    splatValues[4] = GetSplat(x, z, 16);
+                    splatValues[5] = GetSplat(x, z, 32);
+                    splatValues[6] = GetSplat(x, z, 4);
+                    splatValues[7] = GetSplat(x, z, 2);
+                    vector = Vec4.Lerp(vector, config.GravelColor, splatValues[0] * config.GravelColor.w);
+                    vector = Vec4.Lerp(vector, config.PebbleColor, splatValues[1] * config.PebbleColor.w);
+                    vector = Vec4.Lerp(vector, config.RockColor, splatValues[2] * config.RockColor.w);
+                    vector = Vec4.Lerp(vector, config.DirtColor, splatValues[3] * config.DirtColor.w);
+                    vector = Vec4.Lerp(vector, config.GrassColor, splatValues[4] * config.GrassColor.w);
+                    vector = Vec4.Lerp(vector, config.ForestColor, splatValues[5] * config.ForestColor.w);
+                    vector = Vec4.Lerp(vector, config.SandColor, splatValues[6] * config.SandColor.w);
+                    vector = Vec4.Lerp(vector, config.SnowColor, splatValues[7] * config.SnowColor.w);
+                }
+                vector *= 1.05f;
+                array[z * splatres + x] = Color.FromArgb(
+                    255,
+                    ClampToByte(vector.x * 255f),
+                    ClampToByte(vector.y * 255f),
+                    ClampToByte(vector.z * 255f));
+            }
+        });
+        return EncodeBmp(array, splatres, splatres);
+    }
+    private static byte ClampToByte(float v) => (byte)Math.Max(0, Math.Min(255, (int)v));
+    private byte[] EncodeBmp(Color[] pixels, int width, int height)
+    {
+        int maxDim = Math.Max(width, height);
+        float scale = maxDim > 512 ? 512f / maxDim : 1f;
+        int newWidth = (int)(width * scale);
+        int newHeight = (int)(height * scale);
+        Color[] scaled = new Color[newWidth * newHeight];
+        for (int y = 0; y < newHeight; y++)
+        {
+            int srcY = (int)(y / scale);
+            for (int x = 0; x < newWidth; x++)
+            {
+                int srcX = (int)(x / scale);
+                scaled[y * newWidth + x] = pixels[srcY * width + srcX];
+            }
+        }
+        Color[] mirrored = new Color[scaled.Length];
+        for (int y = 0; y < newHeight; y++)
+        {
+            for (int x = 0; x < newWidth; x++)
+            {
+                mirrored[y * newWidth + x] = scaled[y * newWidth + (newWidth - 1 - x)];
+            }
+        }
+        Color[] rotated = new Color[mirrored.Length];
+        for (int y = 0; y < newHeight; y++)
+        {
+            for (int x = 0; x < newWidth; x++)
+            {
+                rotated[y * newWidth + x] = mirrored[(newHeight - 1 - y) * newWidth + (newWidth - 1 - x)];
+            }
+        }
+        int rowSize = (newWidth * 3 + 3) & ~3;
+        int fileSize = 54 + rowSize * newHeight;
+        byte[] buffer = new byte[fileSize];
+        var ms = new MemoryStream(buffer);
+        var bw = new BinaryWriter(ms);
+        bw.Write((ushort)0x4D42);
+        bw.Write(fileSize);
+        bw.Write(0);
+        bw.Write(54);
+        bw.Write(40);
+        bw.Write(newWidth);
+        bw.Write(newHeight);
+        bw.Write((ushort)1);
+        bw.Write((ushort)24);
+        bw.Write(0);
+        bw.Write(rowSize * newHeight);
+        bw.Write(0); bw.Write(0); bw.Write(0); bw.Write(0);
+        for (int y = 0; y < newHeight; y++)
+        {
+            int srcY = newHeight - 1 - y;
+            for (int x = 0; x < newWidth; x++)
+            {
+                var p = rotated[srcY * newWidth + x];
+                bw.Write(p.B);
+                bw.Write(p.G);
+                bw.Write(p.R);
+            }
+            for (int i = 0; i < rowSize - newWidth * 3; i++)
+                bw.Write((byte)0);
+        }
+        return buffer;
+    }
+}
+#endregion
