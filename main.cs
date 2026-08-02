@@ -1,13 +1,4 @@
-﻿/*▄▄▄    ███▄ ▄███▓  ▄████  ▄▄▄██▀▀▀▓█████▄▄▄█████▓
-▓█████▄ ▓██▒▀█▀ ██▒ ██▒ ▀█▒   ▒██   ▓█   ▀▓  ██▒ ▓▒
-▒██▒ ▄██▓██    ▓██░▒██░▄▄▄░   ░██   ▒███  ▒ ▓██░ ▒░
-▒██░█▀  ▒██    ▒██ ░▓█  ██▓▓██▄██▓  ▒▓█  ▄░ ▓██▓ ░ 
-░▓█  ▀█▓▒██▒   ░██▒░▒▓███▀▒ ▓███▒   ░▒████▒ ▒██▒ ░ 
-░▒▓███▀▒░ ▒░   ░  ░ ░▒   ▒  ▒▓▒▒░   ░░ ▒░ ░ ▒ ░░   
-▒░▒   ░ ░  ░      ░  ░   ░  ▒ ░▒░    ░ ░  ░   ░    
- ░    ░ ░      ░   ░ ░   ░  ░ ░ ░      ░    ░      
- ░             ░         ░  ░   ░      ░  ░*/
-using System;
+﻿using System;
 using System.Net;
 using System.Text;
 using System.Threading;
@@ -37,6 +28,8 @@ using Unity.Jobs;
 using Unity.Burst;
 using Newtonsoft.Json;
 using System.Runtime.CompilerServices;
+using Graphics = System.Drawing.Graphics;
+using System.Globalization;
 
 namespace MapGenny
 {
@@ -126,7 +119,7 @@ namespace MapGenny
         public static class BaseBoat_GenerateOceanPatrolPath
         {
             [HarmonyPrefix]
-            private static bool Prefix() 
+            private static bool Prefix()
             {
                 if (Library.breakprefab)
                 {
@@ -136,7 +129,7 @@ namespace MapGenny
                     return false; //dont run
                 }
                 return true;  //normal
-            }         
+            }
         }
 
         //Block rcon
@@ -174,7 +167,7 @@ namespace MapGenny
                 try
                 {
                     if (name == "Processing World") { return; }
-                    if(name == "Splat Map") { Library.SplatGenned = true; }
+                    if (name == "Splat Map") { Library.SplatGenned = true; }
                     Console.WriteLine($"[Running {name}]");
                 }
                 catch { }
@@ -419,7 +412,7 @@ namespace MapGenny
 
                 return false;
             }
-        
+
 
             private static bool NextCalls(List<CodeInstruction> codes, int index, string methodName)
             {
@@ -553,6 +546,10 @@ namespace MapGenny
                         int width;
                         if (int.TryParse(value, out width))
                         {
+                            if (width > 5 && __instance.RoadType != InfrastructureType.Road)
+                            {
+                                __instance.RoadType = InfrastructureType.Road;
+                            }
                             __result.Width = width;
                         }
                     }
@@ -632,7 +629,7 @@ namespace MapGenny
                     if (float.TryParse(value, out num))
                         return num;
                 }
-                return 20; 
+                return 20;
             }
 
             public static int GetMaxRoadCost()
@@ -714,8 +711,7 @@ namespace MapGenny
             [HarmonyPrefix]
             private static void Prefix(ref string fileName)
             {
-                if (Library.png2cubes == true) { return; }
-                if (Library.breakprefab == true) { return; }
+                if (Library.png2cubes == true || Library.breakprefab == true || Library.createheightmap == true) { return; }
                 Library.RemoveTopology(Library.IsSwitchEnabled("height.roadtopology", false), Library.IsSwitchEnabled("height.railtopology", false));
                 if (Library.IsSwitchEnabled("height.mountainarctic", false))
                 {
@@ -751,19 +747,18 @@ namespace MapGenny
 
                 try
                 {
-                    if (Library.png2cubes == true) { return; }
-                    if (Library.breakprefab == true) { return; }
+                    if (Library.png2cubes == true || Library.breakprefab == true || Library.createheightmap == true) { return; }
                     if (Library.DeleteCustomPrefabs == true)
                     {
-                    string extractPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CustomPrefabs");
-                    if (Directory.Exists(extractPath))
-                    {
-                        string[] files = Directory.GetFiles(extractPath);
-                        foreach (var file in files) { File.Delete(file); }
-                        string[] subdirectories = Directory.GetDirectories(extractPath);
-                        foreach (var subdirectory in subdirectories) { Directory.Delete(subdirectory, true); }
-                        Directory.Delete(extractPath);
-                    }
+                        string extractPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "CustomPrefabs");
+                        if (Directory.Exists(extractPath))
+                        {
+                            string[] files = Directory.GetFiles(extractPath);
+                            foreach (var file in files) { File.Delete(file); }
+                            string[] subdirectories = Directory.GetDirectories(extractPath);
+                            foreach (var subdirectory in subdirectories) { Directory.Delete(subdirectory, true); }
+                            Directory.Delete(extractPath);
+                        }
                     }
                 }
                 catch { }
@@ -822,6 +817,7 @@ namespace MapGenny
                 Library.AllowUpload = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowuploads", Facepunch.Utility.CommandLine.GetSwitch("-allowuploads", (Library.IP == "localhost" ? "true" : "false"))));
                 Library.AllowJobs = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowjobs", Facepunch.Utility.CommandLine.GetSwitch("-allowjobs", "true")));
                 Library.AllowCubes = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowcubes", Facepunch.Utility.CommandLine.GetSwitch("-allowcubes", "true")));
+                Library.AllowCreateHeightMap = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowcreateheightmap", Facepunch.Utility.CommandLine.GetSwitch("-allowcreateheightmap", (Library.IP == "localhost" ? "true" : "false"))));
                 Library.Allow3D = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allow3d", Facepunch.Utility.CommandLine.GetSwitch("-allow3d", "true")));
                 Library.AllowBreakPrefab = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+allowbreakprefab", Facepunch.Utility.CommandLine.GetSwitch("-allowbreakprefab", (Library.IP == "localhost" ? "true" : "false"))));
                 Library.CubesOnly = bool.Parse(Facepunch.Utility.CommandLine.GetSwitch("+cubesonly", Facepunch.Utility.CommandLine.GetSwitch("-cubesonly", "false")));
@@ -856,22 +852,24 @@ Library.DeleteCustomPrefabs = false;
                     if (!Library.AllowUpload) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""uploadBtn"" onclick=""window.location.href='/upload'"">📤 Upload Map</button>", "")); }
                     if (!Library.AllowCubes) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""png2cubesBtn"" onclick=""window.location.href='/png2cubes'"">🧊 Png2Cubes</button>", "")); }
                     if (!Library.AllowJobs) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""runJobsBtn"" onclick=""window.location.href='/jobs'"">🎯 Run Jobs</button>", "")); }
+                    if (!Library.AllowCreateHeightMap) { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace(@"<button class=""upload-btn"" id=""createheightmapBtn"" onclick=""window.location.href='/createheightmap'"">🏔 Create Height Map</button>", "")); }
                     if (Library.AllowJobs)
                     {
                         Library.JobsPage = Encoding.UTF8.GetBytes(Pages.JobsPagehtml);
                         if (Library.QuitPassword != "quit")
                         {
                             Library.JobsPasswordPage = Encoding.UTF8.GetBytes(Pages.StopPasswordPagehtml);
-                            Library.JobsPage =  Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.JobsPage).Replace(@"const res = await fetch('/stopdelete', { method: 'POST' });", "window.location.href = '/stopdelete';" + System.Environment.NewLine + "const res = await fetch('/stopdelete', { method: 'POST' });"));
+                            Library.JobsPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.JobsPage).Replace(@"const res = await fetch('/stopdelete', { method: 'POST' });", "window.location.href = '/stopdelete';" + System.Environment.NewLine + "const res = await fetch('/stopdelete', { method: 'POST' });"));
                         }
                     }
                     if (Library.AllowUpload) { Library.UploadPage = Encoding.UTF8.GetBytes(Pages.UploadPagehtml); }
                 }
+                if (Library.AllowCreateHeightMap) { Library.CreateHeightMapPage = Encoding.UTF8.GetBytes(Pages.CreateHeightMaphtml); }
                 if (Library.AllowBreakPrefab) { Library.BreakPrefabPage = Encoding.UTF8.GetBytes(Pages.BreakPrefabHtml); }
                 Library.QuitPage = Encoding.UTF8.GetBytes(Pages.QuitPagehtml);
                 Library.PasswordPage = Encoding.UTF8.GetBytes(Pages.PasswordPagehtml);
-                if (Library.Allow3D){Library.MapViewer = Encoding.UTF8.GetBytes(Pages.MapViewer);}
-                else{ Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace("<button class='btn' id='_3DBtn'>3D View</button><br>", "")); }
+                if (Library.Allow3D) { Library.MapViewer = Encoding.UTF8.GetBytes(Pages.MapViewer); }
+                else { Library.MainPage = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(Library.MainPage).Replace("<button class='btn' id='_3DBtn'>3D View</button><br>", "")); }
                 Library.StartWebServer();
                 try
                 {
@@ -951,7 +949,7 @@ Library.DeleteCustomPrefabs = false;
                         Console.Write($"[MapGenny] {config.Key} = {config.Value}" + System.Environment.NewLine);
                     }
 #endif
-                    if(Library.breakprefab)
+                    if (Library.breakprefab)
                     {
                         Console.Write($"[MapGenny] BreakPrefab");
                         return true;
@@ -1168,7 +1166,7 @@ Library.DeleteCustomPrefabs = false;
             }
         }
 
-#region Remove MinWordSize Limit
+        #region Remove MinWordSize Limit
         //Remove Offical MinSize Limits
         [HarmonyPatch(typeof(PlaceMonuments), nameof(PlaceMonuments.Process))]
         internal static class PlaceMonuments_Process
@@ -1176,7 +1174,23 @@ Library.DeleteCustomPrefabs = false;
             [HarmonyTranspiler]
             static IEnumerable<CodeInstruction> ApplyRemoveMinSize(IEnumerable<CodeInstruction> instructions, ILGenerator il)
             {
-                return MonumentMinSizeHelper.NOPMinSize(instructions, true).ToList();
+                var result = new List<CodeInstruction>();
+                foreach (var code in instructions)
+                {
+                    if (code.opcode == OpCodes.Ldfld &&
+                        code.operand is FieldInfo fi &&
+                        fi.Name == "MinWorldSize")
+                    {
+                        // remove the object reference that ldfld would have consumed
+                        result.Add(new CodeInstruction(OpCodes.Pop));
+                        // replace field value with zero
+                        result.Add(new CodeInstruction(OpCodes.Ldc_I4_0));
+                        continue;
+                    }
+                    result.Add(code);
+                }
+                return result;
+                //  return MonumentMinSizeHelper.NOPMinSize(instructions, true);
             }
         }
 
@@ -1229,7 +1243,7 @@ Library.DeleteCustomPrefabs = false;
                 return MonumentMinSizeHelper.NOPMinSize(instructions);
             }
         }
-#endregion
+        #endregion
 
         [HarmonyPatch(typeof(Mountain))]
         internal static class MountainPatches
@@ -1440,6 +1454,7 @@ Library.DeleteCustomPrefabs = false;
             public static bool AllowUpload = false;
             public static bool AllowJobs = false;
             public static bool AllowCubes = false;
+            public static bool AllowCreateHeightMap = false;
             public static bool Allow3D = false;
             public static bool AllowBreakPrefab = false;
             public static bool CubesOnly = false;
@@ -1471,6 +1486,7 @@ Library.DeleteCustomPrefabs = false;
             public static bool Generating = false;
             public static bool Restart = false;
             public static bool png2cubes = false;
+            public static bool createheightmap = false;
             public static bool breakprefab = false;
             public static bool DeleteCustomPrefabs = true;
             public static bool HasPendingJobs = false;
@@ -1480,12 +1496,14 @@ Library.DeleteCustomPrefabs = false;
             // Store parsed variables for later use
             public static Dictionary<string, string> ConfigVars = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             public static byte[] HeightPngData = null;
+            public static int HeightPngDataType = 0;
             public static byte[] PrefabsZipData = null;
             public static string[] URL;
             public static byte[] favico = null;
             public static byte[] RestartPage = NoPage();
             public static byte[] UploadPage = NoPage();
             public static byte[] PNG2CubesPage = NoPage();
+            public static byte[] CreateHeightMapPage = NoPage();
             public static byte[] BreakPrefabPage = NoPage();
             public static byte[] MainPage = NoPage();
             public static byte[] PasswordPage = NoPage();
@@ -1657,6 +1675,7 @@ Library.DeleteCustomPrefabs = false;
                 if (strings.Contains("yellow")) predefinedColors.Add(Color.FromArgb(255, 231, 207, 124), 3995280350);
                 return predefinedColors;
             }
+
 
             public class Job
             {
@@ -1899,7 +1918,7 @@ Library.DeleteCustomPrefabs = false;
                 public string WcPrefabWhitelist { get; set; }
             }
 
-#region Functions
+            #region Functions
             public static byte[] NoPage() { return NoPageData; }
 
             public static void RestartServer()
@@ -2107,12 +2126,12 @@ Library.DeleteCustomPrefabs = false;
                         {
                             byte* s = srcRow + (x * 2 * bytesPerPixel);
                             byte* d = dstRow + (x * bytesPerPixel);
-                            for (int b = 0; b < bytesPerPixel; b++){d[b] = s[b];}
+                            for (int b = 0; b < bytesPerPixel; b++) { d[b] = s[b]; }
                         }
                     }
                 }
                 return newData;
-            }         
+            }
 
             public static TextureData DigCircularHoleSmooth(
     TextureData heightData,
@@ -2532,7 +2551,7 @@ Library.DeleteCustomPrefabs = false;
                                 {
                                     int sIdx = (ch * staticRes + sZ) * staticRes + sX;
                                     int wIdx = (ch * worldRes + wZ) * worldRes + wX;
-                                    if (sIdx < staticData.Length && wIdx < worldData.Length){ worldData[wIdx] = staticData[sIdx]; }
+                                    if (sIdx < staticData.Length && wIdx < worldData.Length) { worldData[wIdx] = staticData[sIdx]; }
                                 }
                             }
                             else
@@ -2541,7 +2560,7 @@ Library.DeleteCustomPrefabs = false;
                                 int wIdx = (wZ * worldRes + wX) * bytestep;
                                 if (sIdx + bytestep <= staticData.Length && wIdx + bytestep <= worldData.Length)
                                 {
-                                    for (int b = 0; b < bytestep; b++){worldData[wIdx + b] = staticData[sIdx + b];}
+                                    for (int b = 0; b < bytestep; b++) { worldData[wIdx + b] = staticData[sIdx + b]; }
                                 }
                             }
                         }
@@ -2756,7 +2775,7 @@ Library.DeleteCustomPrefabs = false;
                     }
                 }
             }
-          
+
             private static void ApplyToTerrain(string mapName, byte[] mapData)
             {
                 if (mapData == null) return;
@@ -3329,29 +3348,56 @@ Library.DeleteCustomPrefabs = false;
                 }
                 return LoadMapData(path, texture, originalData, mountain?.fullName);
             }
-#endregion
+            #endregion
 
-#region Methods
+            #region Methods
             public static void CutEdges(ref NativeArray<short> height, int pixels, short depth)
             {
-                int HeightRes = TerrainGenerator.GetHeightMapRes();
-                int minBound = pixels;
-                int maxBound = HeightRes - pixels;
-                // Fill the top and bottom rows with the specified depth
-                for (int y = 0; y < minBound; y++) { Fill(height, y * HeightRes, HeightRes, depth); }
-                for (int y = maxBound; y < HeightRes; y++) { Fill(height, y * HeightRes, HeightRes, depth); }
+                int res = TerrainGenerator.GetHeightMapRes();
 
-                // Left and right edges
-                for (int y = minBound; y < maxBound; y++)
+                for (int y = 0; y < res; y++)
                 {
-                    int yOffset = y * HeightRes;
-                    for (int x = 0; x < minBound; x++) // Left side
+                    for (int x = 0; x < res; x++)
                     {
-                        height[yOffset + x] = depth;
-                    }
-                    for (int x = maxBound; x < HeightRes; x++) // Right side
-                    {
-                        height[yOffset + x] = depth;
+                        // Calculate distance to all 4 edges
+                        int distLeft = x;
+                        int distRight = res - 1 - x;
+                        int distBottom = y;
+                        int distTop = res - 1 - y;
+
+                        // Find closest horizontal and vertical edges
+                        int distX = Math.Min(distLeft, distRight);
+                        int distY = Math.Min(distBottom, distTop);
+
+                        float distToEdge;
+
+                        // Handle smooth rounded corners using standard Euclidean distance
+                        if (distX < pixels && distY < pixels)
+                        {
+                            float dx = pixels - distX;
+                            float dy = pixels - distY;
+                            float distFromCornerInner = (float)Math.Sqrt(dx * dx + dy * dy);
+                            distToEdge = Math.Max(0f, pixels - distFromCornerInner);
+                        }
+                        else
+                        {
+                            distToEdge = Math.Min(distX, distY);
+                        }
+
+                        // Outside the blend margin? Skip.
+                        if (distToEdge >= pixels)
+                            continue;
+
+                        // 0 at border, 1 at inner terrain boundary
+                        float t = Mathf.Clamp(distToEdge / pixels, 0f, 1f);
+
+                        // Smoother curve (Smootherstep: 6t^5 - 15t^4 + 10t^3)
+                        t = t * t * t * (t * (t * 6f - 15f) + 10f);
+
+                        int index = y * res + x;
+                        short original = height[index];
+
+                        height[index] = (short)Math.Round(depth + (original - depth) * t);
                     }
                 }
             }
@@ -3605,6 +3651,17 @@ Library.DeleteCustomPrefabs = false;
                             await HandleCubesUpload(ctx).ConfigureAwait(false);
                         }
                     }
+                    else if (path.StartsWith("/createheightmap", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (ctx.Request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
+                        {
+                            await ServeCreateHeightMapHtml(ctx).ConfigureAwait(false);
+                        }
+                    }
+                    else if (path.StartsWith("/HeightMap.png", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await HandleHeightMapPng(ctx).ConfigureAwait(false);
+                    }
                     else if (path.StartsWith("/breakprefab", StringComparison.OrdinalIgnoreCase))
                     {
                         if (ctx.Request.HttpMethod.Equals("GET", StringComparison.OrdinalIgnoreCase))
@@ -3796,9 +3853,26 @@ Library.DeleteCustomPrefabs = false;
                     if (filenameMatch.Success)
                     {
                         // file content
-                        if (fieldName == "height.png")
+                        if (fieldName == "height.png" || fieldName == "height.tif" || fieldName == "height.raw")
                         {
                             HeightPngData = bodyBytes;
+                            string fn = filenameMatch.Groups["fn"].Value;   // <-- extract the actual filename
+                            string ext = Path.GetExtension(fn).ToLowerInvariant();
+                            if (ext == ".tif" || ext == ".tiff")
+                            {
+                                Console.WriteLine("Got .tif Height Map");
+                                HeightPngDataType = 1;
+                            }
+                            else if (ext == ".raw")
+                            {
+                                Console.WriteLine("Got .raw Height Map");
+                                HeightPngDataType = 2;
+                            }
+                            else
+                            {
+                                Console.WriteLine("Got .png Height Map");
+                                HeightPngDataType = 0; // .png
+                            }
                         }
                         else if (fieldName == "customPrefabFile")
                         {
@@ -4130,6 +4204,15 @@ Library.DeleteCustomPrefabs = false;
                 }
             }
 
+            private static async Task HandleHeightMapPng(HttpListenerContext ctx)
+            {
+                string outPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "HeightMap.png");
+                byte[] Data = null;
+                if (File.Exists(outPath)) { Data = File.ReadAllBytes(outPath); }
+                ctx.Response.AddHeader("Content-Disposition", "attachment; filename=\"HeightMap.png\"");
+                await SafeWrite(ctx.Response, Data, "application/octet-stream");
+            }
+
             private static async Task HandleBreakUpload(HttpListenerContext ctx)
             {
                 try
@@ -4185,15 +4268,15 @@ Library.DeleteCustomPrefabs = false;
                     bool isUint = prefabValue.All(char.IsDigit);
                     if (isUint && uint.TryParse(prefabValue, out PrefabBreakerID))
                     {
-                      if(!StringPool.toString.ContainsKey(PrefabBreakerID)){PrefabBreakerID = 0;} //Not a valid prefabid
+                        if (!StringPool.toString.ContainsKey(PrefabBreakerID)) { PrefabBreakerID = 0; } //Not a valid prefabid
                     }
                     if (PrefabBreakerID == 0 && !string.IsNullOrEmpty(prefabValue))
                     {
                         prefabValue = prefabValue.ToLower();
-                        if (!prefabValue.EndsWith(".prefab")){prefabValue = prefabValue + ".prefab";}
-                        foreach(var s in StringPool.toNumber)
+                        if (!prefabValue.EndsWith(".prefab")) { prefabValue = prefabValue + ".prefab"; }
+                        foreach (var s in StringPool.toNumber)
                         {
-                            if(s.Key.EndsWith(prefabValue))
+                            if (s.Key.EndsWith(prefabValue))
                             {
                                 PrefabBreakerID = s.Value;
                                 break;
@@ -4223,17 +4306,17 @@ Library.DeleteCustomPrefabs = false;
 
             public static async Task FinishBreaking(HttpListenerContext ctx)
             {
-                if(WaitingForBreaker)
+                if (WaitingForBreaker)
                 {
                     await SafeWrite(ctx.Response, Encoding.UTF8.GetBytes("Processing..."), "text/html");
                     return;
                 }
-                if(PrefabBreakerID != 0)
-                { 
+                if (PrefabBreakerID != 0)
+                {
                     Console.WriteLine($"Breaking prefab: {PrefabBreakerID}");
                     Respond(Breaker(PrefabBreakerID), ctx);
                     Library.Restart = true;
-                    if(File.Exists(PrefabBreakerID + ".map")){File.Delete(PrefabBreakerID + ".map");}
+                    if (File.Exists(PrefabBreakerID + ".map")) { File.Delete(PrefabBreakerID + ".map"); }
                     if (File.Exists(World.MapFolderName + "/" + PrefabBreakerID + ".map")) { File.Delete(World.MapFolderName + "/" + PrefabBreakerID + ".map"); }
                     string hashname = string.Format("{0}_{1}.map", global::World.Name, global::World.Url.MurmurHashUnsigned());
                     if (File.Exists(hashname)) { File.Delete(hashname); }
@@ -4432,12 +4515,13 @@ Library.DeleteCustomPrefabs = false;
             {
                 byte[] Data = null;
                 if (File.Exists("Cubes.map")) { Data = File.ReadAllBytes("Cubes.map"); }
+                if (File.Exists("HeightMap.png")) { File.Delete("HeightMap.png"); }
                 await SafeWrite(ctx.Response, Data, "application/octet-stream");
             }
 
             private static async Task HandleModels(HttpListenerContext ctx, string path)
             {
-                if (!path.StartsWith("/Models/", StringComparison.OrdinalIgnoreCase)){return;}
+                if (!path.StartsWith("/Models/", StringComparison.OrdinalIgnoreCase)) { return; }
                 string rawFileName = path.Substring("/Models/".Length);
                 if (rawFileName.Contains('?')) { rawFileName = rawFileName.Split('?')[0]; }
                 string fileName = Path.GetFileName(rawFileName);
@@ -4446,7 +4530,7 @@ Library.DeleteCustomPrefabs = false;
                 string canonicalPath = Path.GetFullPath(fullPath);
                 if (!canonicalPath.StartsWith(rootDirectory, StringComparison.OrdinalIgnoreCase))
                 {
-                    ctx.Response.StatusCode = 403; 
+                    ctx.Response.StatusCode = 403;
                     ctx.Response.Close();
                     return;
                 }
@@ -4459,7 +4543,7 @@ Library.DeleteCustomPrefabs = false;
                 }
                 string extension = Path.GetExtension(fileName).ToLowerInvariant();
                 string contentType = "";
-                 switch (extension)
+                switch (extension)
                 {
                     case ".glb":
                         contentType = "model/gltf-binary"; break;
@@ -4503,8 +4587,8 @@ Library.DeleteCustomPrefabs = false;
             private static async Task Handle3DMAP(HttpListenerContext ctx, string path)
             {
                 DownloadAndUnzipModels(); //Make sure has the models installed
-                if (path.Equals("/3dmap/data", StringComparison.OrdinalIgnoreCase)){await ServeTerrainData(ctx);}
-                else{await SafeWrite(ctx.Response, MapViewer, "text/html");}
+                if (path.Equals("/3dmap/data", StringComparison.OrdinalIgnoreCase)) { await ServeTerrainData(ctx); }
+                else { await SafeWrite(ctx.Response, MapViewer, "text/html"); }
             }
 
             private static async Task ServeTerrainData(HttpListenerContext ctx)
@@ -4515,9 +4599,9 @@ Library.DeleteCustomPrefabs = false;
                 List<Vector3[]> MapRiver = new List<Vector3[]>();
                 List<MapP> Prefabs = new List<MapP>();
                 float worldSize = ConVar.Server.worldsize;
-                try{if (TerrainMeta.Path?.Roads?.Count > 0) { foreach (var r in TerrainMeta.Path.Roads) { if (r.Width > 5) { MapRoad.Add(r.Path.Points); } } }}catch { }
-                try{if (TerrainMeta.Path?.Rails?.Count > 0) { foreach (var r in TerrainMeta.Path.Rails) { MapRail.Add(r.Path.Points); } }}catch { }
-                try{if (TerrainMeta.Path?.Rivers?.Count > 0) { foreach (var r in TerrainMeta.Path.Rivers) { MapRiver.Add(r.Path.Points); } }}catch { }
+                try { if (TerrainMeta.Path?.Roads?.Count > 0) { foreach (var r in TerrainMeta.Path.Roads) { if (r.Width > 5) { MapRoad.Add(r.Path.Points); } } } } catch { }
+                try { if (TerrainMeta.Path?.Rails?.Count > 0) { foreach (var r in TerrainMeta.Path.Rails) { MapRail.Add(r.Path.Points); } } } catch { }
+                try { if (TerrainMeta.Path?.Rivers?.Count > 0) { foreach (var r in TerrainMeta.Path.Rivers) { MapRiver.Add(r.Path.Points); } } } catch { }
                 if (World.Serialization?.world?.prefabs?.Count > 0)
                 {
                     foreach (var pd in World.Serialization.world.prefabs.ToArray())
@@ -4591,7 +4675,7 @@ Library.DeleteCustomPrefabs = false;
                     using (var compressionStream = new GZipStream(ms, System.IO.Compression.CompressionLevel.Fastest, true))
                     using (var writer = new StreamWriter(compressionStream, new UTF8Encoding(false)))
                     {
-                        var settings = new JsonSerializerSettings{ReferenceLoopHandling = ReferenceLoopHandling.Ignore,ContractResolver = new Newtonsoft.Json.Serialization.DefaultContractResolver()};
+                        var settings = new JsonSerializerSettings { ReferenceLoopHandling = ReferenceLoopHandling.Ignore, ContractResolver = new Newtonsoft.Json.Serialization.DefaultContractResolver() };
                         var serializer = JsonSerializer.Create(settings);
                         serializer.Serialize(writer, terrainData);
                         writer.Flush();
@@ -4660,15 +4744,19 @@ Library.DeleteCustomPrefabs = false;
 
             private static async Task ServeCubesHtml(HttpListenerContext ctx) { await SafeWrite(ctx.Response, PNG2CubesPage, "text/html"); }
 
-            private static async Task ServeBreakHtml(HttpListenerContext ctx) 
-            { 
+            private static async Task ServeCreateHeightMapHtml(HttpListenerContext ctx) { await SafeWrite(ctx.Response, CreateHeightMapPage, "text/html"); }
+
+
+            private static async Task ServeBreakHtml(HttpListenerContext ctx)
+            {
                 if (Library.Restart)
                 {
                     await Library.HandleRestart(ctx).ConfigureAwait(false);
                     await Task.Delay(TimeSpan.FromSeconds(2.0));
-                    Library._continueEvent.Set(); return; } 
-                if (breakprefab) { await FinishBreaking(ctx); return; } 
-                await SafeWrite(ctx.Response, BreakPrefabPage, "text/html"); 
+                    Library._continueEvent.Set(); return;
+                }
+                if (breakprefab) { await FinishBreaking(ctx); return; }
+                await SafeWrite(ctx.Response, BreakPrefabPage, "text/html");
             }
 
 
@@ -5512,6 +5600,355 @@ Library.DeleteCustomPrefabs = false;
                 return result;
             }
 
+            public static readonly Color[] Scale =
+            {
+        ColorTranslator.FromHtml("#EAC7C8"),
+        ColorTranslator.FromHtml("#EC867E"),
+        ColorTranslator.FromHtml("#E6B879"),
+        ColorTranslator.FromHtml("#EBDE7D"),
+        ColorTranslator.FromHtml("#99EA7F"),
+        ColorTranslator.FromHtml("#79EBA8"),
+        ColorTranslator.FromHtml("#79E9E9"),
+        ColorTranslator.FromHtml("#79CFEC")
+    };
+
+            public struct LabColor
+            {
+                public double L;
+                public double A;
+                public double B;
+            }
+
+            public static LabColor[] ScaleLab;
+
+            public static Bitmap EnsureBlackAndWhite(Bitmap src)
+            {
+                ScaleLab = new LabColor[Scale.Length];
+                for (int i = 0; i < Scale.Length; i++)
+                {
+                    RgbToLab(Scale[i], out double l, out double a, out double b);
+                    ScaleLab[i] = new LabColor
+                    {
+                        L = l,
+                        A = a,
+                        B = b
+                    };
+                }
+                if (!IsColorImage(src))
+                {
+                    Console.WriteLine("Image already grayscale.");
+                    return src;
+                }
+
+                Console.WriteLine("Color image detected. Converting...");
+                return ScaleImage(204, src);
+            }
+
+            public static bool IsColorImage(Bitmap bitmap)
+            {
+                Bitmap rgbBitmap = new Bitmap(bitmap.Width, bitmap.Height,
+                    PixelFormat.Format24bppRgb);
+
+                using (Graphics g = Graphics.FromImage(rgbBitmap))
+                {
+                    g.DrawImage(bitmap, 0, 0);
+                }
+
+                Rectangle rect = new Rectangle(0, 0, rgbBitmap.Width, rgbBitmap.Height);
+
+                BitmapData data = rgbBitmap.LockBits(
+                    rect,
+                    ImageLockMode.ReadOnly,
+                    PixelFormat.Format24bppRgb);
+
+                try
+                {
+                    const int tolerance = 5;
+
+                    unsafe
+                    {
+                        byte* scan0 = (byte*)data.Scan0;
+
+                        for (int y = 0; y < rgbBitmap.Height; y++)
+                        {
+                            byte* row = scan0 + y * data.Stride;
+
+                            for (int x = 0; x < rgbBitmap.Width; x++)
+                            {
+                                byte* pixel = row + x * 3;
+
+                                byte b = pixel[0];
+                                byte g = pixel[1];
+                                byte r = pixel[2];
+
+                                if (Math.Abs(r - g) > tolerance ||
+                                    Math.Abs(g - b) > tolerance ||
+                                    Math.Abs(r - b) > tolerance)
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+
+                    return false;
+                }
+                finally
+                {
+                    rgbBitmap.UnlockBits(data);
+                }
+            }
+
+            public static Bitmap ScaleImage(int scale, Bitmap inputimg)
+            {
+                if (inputimg == null)
+                    return null;
+
+                int width = inputimg.Width;
+                int height = inputimg.Height;
+                Bitmap output = new Bitmap(width, height, PixelFormat.Format8bppIndexed);
+                ColorPalette palette = output.Palette;
+
+                for (int i = 0; i < 256; i++)
+                    palette.Entries[i] = Color.FromArgb(i, i, i);
+
+                output.Palette = palette;
+
+                BitmapData inData = null;
+                BitmapData outData = null;
+
+                try
+                {
+                    inData = inputimg.LockBits(
+                        new Rectangle(0, 0, width, height),
+                        ImageLockMode.ReadOnly,
+                        inputimg.PixelFormat);
+
+                    outData = output.LockBits(
+                        new Rectangle(0, 0, width, height),
+                        ImageLockMode.WriteOnly,
+                        PixelFormat.Format8bppIndexed);
+
+                    unsafe
+                    {
+                        byte* inScan0 = (byte*)inData.Scan0;
+                        byte* outScan0 = (byte*)outData.Scan0;
+
+                        int inBpp = Image.GetPixelFormatSize(inputimg.PixelFormat) / 8;
+
+                        int minGray = 255;
+                        int maxGray = 0;
+                        int lastPercent = -1;
+
+                        for (int y = 0; y < height; y++)
+                        {
+                            int percent = y * 100 / height;
+
+                            if (percent != lastPercent && percent % 5 == 0)
+                            {
+                                lastPercent = percent;
+                                Console.WriteLine($"Scanning: {percent}%");
+                            }
+
+                            byte* inRow = inScan0 + (y * inData.Stride);
+
+                            for (int x = 0; x < width; x++)
+                            {
+                                int idx = x * inBpp;
+
+                                byte r = inRow[idx + 2];
+                                byte g = inRow[idx + 1];
+                                byte b = inRow[idx + 0];
+
+                                int gray = ElevationToGray(r, g, b);
+
+                                if (gray < minGray)
+                                    minGray = gray;
+
+                                if (gray > maxGray)
+                                    maxGray = gray;
+                            }
+                        }
+
+                        Console.WriteLine($"MinGray={minGray} MaxGray={maxGray}");
+
+                        int range = maxGray - minGray;
+                        lastPercent = -1;
+
+                        for (int y = 0; y < height; y++)
+                        {
+                            int percent = y * 100 / height;
+
+                            if (percent != lastPercent && percent % 5 == 0)
+                            {
+                                lastPercent = percent;
+                                Console.WriteLine($"Converting: {percent}%");
+                            }
+
+                            byte* inRow = inScan0 + (y * inData.Stride);
+                            byte* outRow = outScan0 + (y * outData.Stride);
+
+                            for (int x = 0; x < width; x++)
+                            {
+                                int idx = x * inBpp;
+
+                                byte r = inRow[idx + 2];
+                                byte g = inRow[idx + 1];
+                                byte b = inRow[idx + 0];
+
+                                int gray = ElevationToGray(r, g, b);
+
+                                int stretchedGray;
+
+                                if (range == 0)
+                                {
+                                    stretchedGray = 0;
+                                }
+                                else
+                                {
+                                    stretchedGray =
+                                        (int)((gray - minGray) /
+                                        (double)range * scale);
+                                }
+
+                                if (stretchedGray < 0)
+                                    stretchedGray = 0;
+                                else if (stretchedGray > 255)
+                                    stretchedGray = 255;
+
+                                outRow[x] = (byte)stretchedGray;
+                            }
+                        }
+                    }
+                }
+                finally
+                {
+                    if (inData != null)
+                        inputimg.UnlockBits(inData);
+
+                    if (outData != null)
+                        output.UnlockBits(outData);
+                }
+
+                return output;
+            }
+
+            private static int ElevationToGray(byte r, byte g, byte b)
+            {
+                RgbToLab(r, g, b, out double l0, out double a0, out double b0);
+
+                int bestIndex = 0;
+                double bestT = 0;
+                double minDistance = double.MaxValue;
+
+                for (int i = 0; i < ScaleLab.Length - 1; i++)
+                {
+                    LabColor c1 = ScaleLab[i];
+                    LabColor c2 = ScaleLab[i + 1];
+
+                    double abL = c2.L - c1.L;
+                    double abA = c2.A - c1.A;
+                    double abB = c2.B - c1.B;
+
+                    double apL = l0 - c1.L;
+                    double apA = a0 - c1.A;
+                    double apB = b0 - c1.B;
+
+                    double abDotAb =
+                        abL * abL +
+                        abA * abA +
+                        abB * abB;
+
+                    double apDotAb =
+                        apL * abL +
+                        apA * abA +
+                        apB * abB;
+
+                    double t = abDotAb == 0
+                        ? 0
+                        : Math.Max(0, Math.Min(1, apDotAb / abDotAb));
+
+                    double closestL = c1.L + abL * t;
+                    double closestA = c1.A + abA * t;
+                    double closestB = c1.B + abB * t;
+
+                    double dist =
+                        (l0 - closestL) * (l0 - closestL) +
+                        (a0 - closestA) * (a0 - closestA) +
+                        (b0 - closestB) * (b0 - closestB);
+
+                    if (dist < minDistance)
+                    {
+                        minDistance = dist;
+                        bestIndex = i;
+                        bestT = t;
+                    }
+                }
+
+                double scalePos = bestIndex + bestT;
+
+                double gray =
+                    255.0 * (1.0 - (scalePos / (Scale.Length - 1)));
+
+                return (int)Math.Round(gray);
+            }
+
+            private static void RgbToLab(
+                byte red,
+                byte green,
+                byte blue,
+                out double l,
+                out double a,
+                out double bLab)
+            {
+                double r = red * 0.00392156862745;
+                double g = green * 0.00392156862745;
+                double b = blue * 0.00392156862745;
+
+                r = (r > 0.04045)
+                    ? Math.Pow((r + 0.055) * 0.9478672986, 2.4)
+                    : r * 0.0773993808;
+
+                g = (g > 0.04045)
+                    ? Math.Pow((g + 0.055) * 0.9478672986, 2.4)
+                    : g * 0.0773993808;
+
+                b = (b > 0.04045)
+                    ? Math.Pow((b + 0.055) * 0.9478672986, 2.4)
+                    : b * 0.0773993808;
+
+                double x = r * 0.4124 + g * 0.3576 + b * 0.1805;
+                double y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+                double z = r * 0.0193 + g * 0.1192 + b * 0.9505;
+
+                x *= 1.052111060;
+                z *= 0.918417016;
+
+                double fx = (x > 0.008856)
+                    ? Math.Pow(x, 1.0 / 3.0)
+                    : (7.787 * x + 0.1379310345);
+
+                double fy = (y > 0.008856)
+                    ? Math.Pow(y, 1.0 / 3.0)
+                    : (7.787 * y + 0.1379310345);
+
+                double fz = (z > 0.008856)
+                    ? Math.Pow(z, 1.0 / 3.0)
+                    : (7.787 * z + 0.1379310345);
+
+                l = 116.0 * fy - 16.0;
+                a = 500.0 * (fx - fy);
+                bLab = 200.0 * (fy - fz);
+            }
+
+            private static void RgbToLab(
+                Color color,
+                out double l,
+                out double a,
+                out double b)
+            {
+                RgbToLab(color.R, color.G, color.B, out l, out a, out b);
+            }
 
             private static Bitmap EnsureOrientation(Bitmap src)
             {
@@ -5556,7 +5993,7 @@ Library.DeleteCustomPrefabs = false;
                         ZipFile.ExtractToDirectory(zipPath, rootPath);
                         File.Delete(zipPath);
                     }
-                    catch (Exception ex){Console.WriteLine("Error: " + ex.Message);}
+                    catch (Exception ex) { Console.WriteLine("Error: " + ex.Message); }
                 }
             }
 
@@ -5566,10 +6003,18 @@ Library.DeleteCustomPrefabs = false;
                 {
                     //Get root custom height first
                     string customheight = Path.Combine("jobs", "height.png");
-                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); }
+                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); HeightPngDataType = 0; }
+                    customheight = Path.Combine("jobs", "height.tif");
+                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); HeightPngDataType = 1; }
+                    customheight = Path.Combine("jobs", "height.raw");
+                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); HeightPngDataType = 2; }
                     //Get override from jobs folder
                     customheight = Path.Combine(Library.pendingJobs[0].path, "height.png");
-                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); }
+                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); HeightPngDataType = 0; }
+                    customheight = Path.Combine(Library.pendingJobs[0].path, "height.tif");
+                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); HeightPngDataType = 1; }
+                    customheight = Path.Combine(Library.pendingJobs[0].path, "height.raw");
+                    if (File.Exists(customheight)) { HeightPngData = File.ReadAllBytes(customheight); HeightPngDataType = 2; }
                 }
                 if (HeightPngData == null) { return; }
                 //Get Heigth Map Settings Switches
@@ -5577,6 +6022,7 @@ Library.DeleteCustomPrefabs = false;
                 var MaxHeight = Math.Min(float.Parse(GetSwitch("height.max", "700")), 999);
                 var Smoothing = int.Parse(GetSwitch("height.smooth", "20"));
                 var OceanCuts = int.Parse(GetSwitch("height.cuts", "40"));
+                var Offshore = BitUtility.Float2Short(float.Parse(GetSwitch("height.offshore", "470")) / 1000);
                 var SeaBed = BitUtility.Float2Short(float.Parse(GetSwitch("height.floor", "465")) / 1000);
                 var WaterLevel = BitUtility.Float2Short(float.Parse(GetSwitch("height.water", "500")) / 1000);
                 var res = TerrainGenerator.GetHeightMapRes();
@@ -5597,15 +6043,149 @@ Library.DeleteCustomPrefabs = false;
                         AccessTools.Property(typeof(TerrainMeta), nameof(TerrainMeta.LootAxisAngle)).SetValue(null, (float)LootAxisAngle);
                     }
                 }
-
                 Bitmap bmp;
-                using (var ms = new MemoryStream(HeightPngData))
+                Bitmap newImage = null;
+                string type = "png";
+                if (HeightPngDataType == 0) // png
                 {
-                    bmp = new Bitmap(ms);
+                    using (var ms = new MemoryStream(HeightPngData))
+                    {
+                        bmp = new Bitmap(ms);
+                    }
+                    newImage = new Bitmap(resizeImage(bmp, new Size(res, res)));
+                    // Check if coloured height map and convert it
+                    newImage = EnsureBlackAndWhite(newImage);
+
+                    newImage = EnsureOrientation(newImage);
+                    newImage = SmoothCoastlineWithGradient(newImage);
                 }
-                Bitmap newImage = new Bitmap(resizeImage(bmp, new Size(res, res)));
-                newImage = EnsureOrientation(newImage);
-                newImage = SmoothCoastlineWithGradient(newImage);
+                else if (HeightPngDataType == 1) // tif / tiff
+                {
+                    type = ".tif";
+                    // Decode TIFF. GDI+ needs the stream alive while we copy, so go Image -> temp PNG -> Bitmap.
+                    using (var src = Image.FromStream(new MemoryStream(HeightPngData)))
+                    {
+                        if (!src.RawFormat.Equals(System.Drawing.Imaging.ImageFormat.Tiff) &&
+                            !src.RawFormat.Equals(System.Drawing.Imaging.ImageFormat.MemoryBmp))
+                        {
+                            // The codec insisted on something else; still try to use it.
+                            Console.WriteLine("[HeightMap] Warning: TIFF input did not report TIFF RawFormat, continuing anyway.");
+                        }
+
+                        string tmpPng = Path.Combine(Path.GetTempPath(), "mapgenny_height_" + Guid.NewGuid().ToString("N") + ".png");
+                        try
+                        {
+                            // Decode through a temp file. This forces GDI+ to fully decode the TIFF
+                            // (works around indexed/palette/16-bit issues) and avoids "generic GDI+" errors.
+                            src.Save(tmpPng, System.Drawing.Imaging.ImageFormat.Png);
+                            using (var fs = new FileStream(tmpPng, FileMode.Open, FileAccess.Read))
+                            {
+                                bmp = new Bitmap(fs);
+                            }
+                        }
+                        finally
+                        {
+                            try { if (File.Exists(tmpPng)) File.Delete(tmpPng); } catch { }
+                        }
+                    }
+
+                    // Force 24bpp RGB (TIFF can be 1/4/8 bpp indexed, 16-bit, CMYK, etc.)
+                    Bitmap fixedBmp = new Bitmap(bmp.Width, bmp.Height, PixelFormat.Format24bppRgb);
+                    using (Graphics g = Graphics.FromImage(fixedBmp))
+                    {
+                        g.DrawImage(bmp, 0, 0);
+                    }
+
+                    newImage = new Bitmap(resizeImage(fixedBmp, new Size(res, res)));
+                    newImage = EnsureOrientation(newImage);
+                }
+                else if (HeightPngDataType == 2) // raw
+                {
+                    type = ".raw";
+                    // World Creator exports RAW as 16-bit unsigned, little-endian, single channel.
+                    // Bytes per pixel is configurable via "height.raw.bits" (16 or 32). Default 16.
+                    int bitsPerSample = 16;
+                    if (Library.ConfigVars != null && Library.ConfigVars.TryGetValue("height.raw.bits", out string bpsStr))
+                    {
+                        if (int.TryParse(bpsStr, out int bpsParsed) && (bpsParsed == 8 || bpsParsed == 16 || bpsParsed == 32))
+                            bitsPerSample = bpsParsed;
+                        else
+                            Console.WriteLine($"[HeightMap] Invalid height.raw.bits '{bpsStr}', using 16.");
+                    }
+                    int bytesPerPixel = bitsPerSample / 8;
+                    bool littleEndian = true;
+                    if (Library.ConfigVars != null && Library.ConfigVars.TryGetValue("height.raw.endian", out string endStr))
+                    {
+                        littleEndian = !(endStr.Equals("big", StringComparison.OrdinalIgnoreCase) || endStr == "BE");
+                    }
+
+                    // Infer the RAW's own dimensions from file size. It's always square, power of two in practice.
+                    long totalPixels = HeightPngData.Length / bytesPerPixel;
+                    int rawDim = (int)Math.Round(Math.Sqrt(totalPixels));
+                    if (Library.ConfigVars != null && Library.ConfigVars.TryGetValue("height.raw.size", out string sizeStr))
+                    {
+                        if (int.TryParse(sizeStr, out int forced) && forced > 0)
+                            rawDim = forced;
+                    }
+
+                    if ((long)rawDim * rawDim != totalPixels)
+                    {
+                        Console.WriteLine($"[HeightMap] WARNING: RAW file size {HeightPngData.Length} bytes does not look like a square " +
+                                          $"{rawDim}x{rawDim}x{bitsPerSample}-bit image. Proceeding with inferred size {rawDim}.");
+                    }
+
+                    // First pass: find min/max for normalization
+                    uint min = uint.MaxValue;
+                    uint max = uint.MinValue;
+                    uint[,] heights = new uint[rawDim, rawDim];
+
+                    using (var ms = new MemoryStream(HeightPngData))
+                    using (var br = new BinaryReader(ms))
+                    {
+                        for (int y = 0; y < rawDim; y++)
+                        {
+                            for (int x = 0; x < rawDim; x++)
+                            {
+                                uint value;
+                                if (bitsPerSample == 32)
+                                    value = br.ReadUInt32();
+                                else if (bitsPerSample == 16)
+                                    value = br.ReadUInt16();
+                                else // 8
+                                    value = br.ReadByte();
+
+                                if (!littleEndian && bitsPerSample > 8)
+                                {
+                                    // byte-swap
+                                    int n = bytesPerPixel;
+                                    uint b = 0;
+                                    for (int k = 0; k < n; k++) b = (b << 8) | ((value >> (k * 8)) & 0xFF);
+                                    value = b;
+                                }
+
+                                heights[x, y] = value;
+                                if (value < min) min = value;
+                                if (value > max) max = value;
+                            }
+                        }
+                    }
+
+                    // Build a grayscale Bitmap at the RAW's native size, then resize to res.
+                    newImage = new Bitmap(rawDim, rawDim, PixelFormat.Format24bppRgb);
+                    float range = (max == min) ? 1f : (max - min);
+                    for (int y = 0; y < rawDim; y++)
+                    {
+                        for (int x = 0; x < rawDim; x++)
+                        {
+                            float normalized = (heights[x, y] - min) / range;
+                            byte v = (byte)(normalized * 255f);
+                            newImage.SetPixel(x, y, Color.FromArgb(v, v, v));
+                        }
+                    }
+
+                    // Resize to the terrain heightmap resolution
+                    newImage = new Bitmap(resizeImage(newImage, new Size(res, res)));
+                }
                 var smin = (short)ScaleValue(MinHeight, 1, 999, 0, short.MaxValue);
                 var smax = (short)ScaleValue(MaxHeight, 1, 999, 0, short.MaxValue);
                 HeightData = new NativeArray<short>(res * res, Allocator.Persistent);
@@ -5623,16 +6203,17 @@ Library.DeleteCustomPrefabs = false;
                 int halfrate = -1;
                 for (var i = 1; i <= OceanCuts; i++)
                 {
-                    DeepOcean_Burst(ref HeightData, i + i, (short)Math.Min((smin - (i * (i - 15) / 3)), smin - (2 * i)), WaterLevel, SeaBed);
+                    DeepOcean_Burst(ref HeightData, i + i, (short)Math.Min((smin - (i * (i - 15) / 3)), smin - (2 * i)), WaterLevel, Offshore);
                     SmoothMap(ref HeightData, WaterLevel + 16);
                     if (halfrate > 2)
                     {
-                        Console.WriteLine("Converting Png: " + 100 * i / OceanCuts + "%");
+                        //Console.WriteLine("Converting Png" + 100 * i / OceanCuts + "%"); Remove hard coding
+                        Console.WriteLine("Converting " + type + ": " + 100 * i / OceanCuts + "%");
                         halfrate = -1;
                     }
                     halfrate++;
                 }
-                DeepOcean_Burst(ref HeightData, OceanCuts + 2, SeaBed, WaterLevel, SeaBed);
+                DeepOcean_Burst(ref HeightData, OceanCuts + 2, Offshore, WaterLevel, SeaBed);
                 SmoothMap(ref HeightData, WaterLevel + 16);
                 for (var loops = 0; loops < Smoothing; loops++) //Times to smooth
                 {
@@ -5738,14 +6319,14 @@ Library.DeleteCustomPrefabs = false;
             //Check its not at GC position for packet monuments y -0.5 (scripts and stuff)
             private static bool GarbageCollection(PrefabData pd)
             {
-                if (pd.position.x == 0 && (pd.position.y == -0.5f || pd.position.y == 0f) && pd.position.z == 0 && pd.rotation.x == 0 && pd.rotation.y == 0 && pd.rotation.z == 0) { return true; } 
+                if (pd.position.x == 0 && (pd.position.y == -0.5f || pd.position.y == 0f) && pd.position.z == 0 && pd.rotation.x == 0 && pd.rotation.y == 0 && pd.rotation.z == 0) { return true; }
                 return false;
             }
 
             //Some useless prefabs that can cause issues
             private static bool BadPrefab(uint ID)
             {
-                if (badprefabs.Contains(ID)) { return true; } 
+                if (badprefabs.Contains(ID)) { return true; }
                 return false;
             }
 
@@ -5837,7 +6418,7 @@ Library.DeleteCustomPrefabs = false;
                 }
                 return list;
             }
-#endregion
+            #endregion
         }
 
         public class CustomPrefab
@@ -6309,7 +6890,7 @@ color: #fff;
 padding: 8px 14px;
 border-radius: 20px;
 cursor: pointer;
-font-size: 13px;
+font-size: clamp(9px, 0.8vw, 12px);
 transition: background 0.3s, transform 0.2s;
 }
 .theme-toggle:hover,
@@ -6363,6 +6944,7 @@ input.invalid, select.invalid, textarea.invalid {
 <div class=""top-buttons"">
 <button class=""theme-toggle"" id=""themeToggle"">🌙 Dark Mode</button>
 <div class=""right-buttons"">
+<button class=""upload-btn"" id=""createheightmapBtn"" onclick=""window.location.href='/createheightmap'"">🏔 Create Height Map</button>
 <button class=""upload-btn"" id=""png2cubesBtn"" onclick=""window.location.href='/png2cubes'"">🧊 Png2Cubes</button>
 <button class=""upload-btn"" id=""breakprefabBtn"" onclick=""window.location.href='/breakprefab'"">📦 BreakPrefab</button>
 <button class=""upload-btn"" id=""runJobsBtn"" onclick=""window.location.href='/jobs'"">🎯 Run Jobs</button>
@@ -6390,9 +6972,9 @@ input.invalid, select.invalid, textarea.invalid {
 </div>
 <!-- Height Map -->
 <div class=""form-group"">
-<label for=""heightInput"">Height Map Image (8 bit black and white PNG)</label>
+<label for=""heightInput"">Height Map Image</label>
 <div style=""display:flex; align-items:center; gap:6px;"">
-<input type=""file"" name=""height.png"" id=""heightInput"" accept=""image/png"">
+<input type=""file"" name=""height.png"" id=""heightInput"" accept="".png,image/png,.tif,.tiff,image/tiff,.raw"">
 <button type=""button"" class=""btn"" onclick=""document.getElementById('heightInput').value=''; document.getElementById('heightPreview').style.display='none';"">Clear</button>
 </div>
 <img id=""heightPreview"" alt=""Height Preview"" style=""display:none; margin-top:4px;"">
@@ -6411,7 +6993,7 @@ input.invalid, select.invalid, textarea.invalid {
 <fieldset>
 <legend>Edge & Topology Options</legend>
 <div class='form-group'><label>Cut Edge (Flattens around the edge of the map)</label><select name='height.edge'><option>true</option><option>false</option></select></div>
-<div class='form-group'><label>Pixels To Use On Edge Cut</label><input type='number' name='height.pixels' value='5' min='0' max='1000' required></div>
+<div class='form-group'><label>Pixels To Use On Edge Cut</label><input type='number' name='height.pixels' value='20' min='0' max='1000' required></div>
 <div class='form-group'><label>Remove Road Topology</label><select name='height.roadtopology'><option>false</option><option>true</option></select></div>
 <div class='form-group'><label>Remove Rail Topology</label><select name='height.railtopology'><option>false</option><option>true</option></select></div>
 <div class='form-group'><label>Flatten Lakes (Makes lakes shallow to build on)</label><select name='height.flatlakes'><option>false</option><option>true</option></select></div>
@@ -6551,6 +7133,7 @@ document.addEventListener('DOMContentLoaded', () => {
     uploadBtn.addEventListener('click', () => window.location.href = '/upload');
     }
   const png2cubesBtn = document.getElementById('png2cubesBtn');
+  const createheightmapBtn = document.getElementById('createheightmapBtn');
   const breakprefabBtn = document.getElementById('breakprefabBtn');
   const previewImg = document.getElementById('previewImg');
   const consoleBox = document.getElementById('consoleBox');
@@ -6770,6 +7353,7 @@ function validateForm() {
   });
   quitBtn.addEventListener('click', () => { if (!confirm('Are you sure you want to shutdown the server')) { return; } window.location.href = '/quit'; });
   png2cubesBtn.addEventListener('click', () => window.location.href = '/png2cubes');
+  createheightmapBtn.addEventListener('click', () => window.location.href = '/createheightmap');
   breakprefabBtn.addEventListener('click', () => window.location.href = '/breakprefab');
   runJobsBtn.addEventListener('click', () => window.location.href = '/jobs');
 if (imageModal && modalImg) {
@@ -6789,6 +7373,1188 @@ if (imageModal && modalImg) {
 </script>
 </body>
 </html>";
+    #endregion
+
+    #region CreateHeightMap HTML
+    public static string CreateHeightMaphtml = @"<!DOCTYPE html>
+<html lang=""en"">
+<head>
+<meta charset=""UTF-8"">
+<meta name=""viewport"" content=""width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"">
+<meta name=""apple-mobile-web-app-capable"" content=""yes"">
+<meta name=""apple-mobile-web-app-status-bar-style"" content=""black-translucent"">
+<title>Map Editor</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  :root {
+    --bg: #1a1a2e;
+    --bg-2: #16213e;
+    --panel: rgba(0,0,0,0.7);
+    --border: rgba(0,217,255,0.3);
+    --accent: #00d9ff;
+    --accent-2: #00ff88;
+    --text: #fff;
+    --muted: rgba(255,255,255,0.6);
+    --danger: #ff4444;
+  }
+  html, body {
+    overflow: hidden;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    background: var(--bg);
+    height: 100%;
+    width: 100%;
+    color: var(--text);
+    font-size: 12px;
+    touch-action: none;
+  }
+  #app {
+    display: grid;
+    grid-template-columns: 210px 1fr 240px;
+    grid-template-rows: 48px 1fr 24px;
+    height: 100vh;
+    height: 100dvh;
+    width: 100vw;
+  }
+  #topbar {
+    grid-column: 1 / 4;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  #topbar .title {
+    font-size: 15px;
+    font-weight: bold;
+    color: var(--accent);
+    letter-spacing: 1px;
+    margin-right: 8px;
+    white-space: nowrap;
+  }
+  #topbar .actions { display: flex; gap: 5px; }
+  #left-panel, #right-panel {
+    background: var(--bg-2);
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 10px;
+  }
+  #left-panel { border-right: 1px solid var(--border); }
+  #right-panel { border-left: 1px solid var(--border); }
+  h3 {
+    color: var(--accent);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    margin: 10px 0 6px 0;
+    padding-bottom: 3px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3:first-child { margin-top: 0; }
+  button {
+    background: rgba(0,0,0,0.4);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  button:hover { background: rgba(0,217,255,0.2); border-color: var(--accent); }
+  button:disabled { opacity: 0.35; cursor: not-allowed; }
+  .tool-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+  .tool-btn {
+    background: rgba(0,0,0,0.4);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 6px 2px;
+    border-radius: 4px;
+    font-size: 10px;
+    cursor: pointer;
+    text-align: center;
+    transition: all 0.15s;
+    font-family: inherit;
+  }
+  .tool-btn:hover { background: rgba(0,217,255,0.15); }
+  .tool-btn.active {
+    background: rgba(0,217,255,0.25);
+    border-color: var(--accent);
+    color: var(--accent);
+    box-shadow: 0 0 8px rgba(0,217,255,0.3);
+  }
+  .tool-btn .icon { display: block; font-size: 14px; margin-bottom: 1px; }
+  .action-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+  }
+  .action-grid button { padding: 5px 2px; font-size: 10px; }
+  #center {
+    background: #0a0a1a;
+    position: relative;
+    overflow: hidden;
+  }
+  #canvas2d {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    image-rendering: pixelated;
+  }
+  #brushRing {
+    position: absolute;
+    border: 1px solid var(--accent-2);
+    border-radius: 50%;
+    pointer-events: none;
+    display: none;
+    box-shadow: 0 0 6px rgba(0,255,136,0.6);
+  }
+  #loadingBanner, #warnBanner {
+    position: absolute;
+    left: 50%;
+    top: 10px;
+    transform: translateX(-50%);
+    background: var(--panel);
+    border: 1px solid var(--border);
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-size: 11px;
+    z-index: 50;
+    display: none;
+  }
+  #warnBanner { border-color: var(--danger); color: #ffb3b3; }
+  .field {
+    margin: 5px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .field label {
+    font-size: 10px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .field label span.val { color: var(--accent); font-family: monospace; }
+  .field input[type=range] {
+    width: 100%;
+    height: 4px;
+    background: rgba(0,217,255,0.2);
+    border-radius: 2px;
+    -webkit-appearance: none;
+    appearance: none;
+    outline: none;
+  }
+  .field input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .field input[type=range]::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: var(--accent);
+    border-radius: 50%;
+    cursor: pointer;
+    border: none;
+  }
+  .field input[type=number], .field select {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 3px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: inherit;
+    width: 100%;
+    outline: none;
+  }
+  .field input[type=number]:focus, .field select:focus { border-color: var(--accent); }
+  .field input[type=checkbox] { accent-color: var(--accent); }
+  .field.checkbox label { flex-direction: row; cursor: pointer; gap: 6px; }
+  #statusbar {
+    grid-column: 1 / 4;
+    background: var(--bg-2);
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 14px;
+    font-size: 10px;
+    font-family: monospace;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  #statusbar span { color: var(--muted); }
+  #statusbar .val { color: var(--accent); }
+  .sep { height: 1px; background: var(--border); margin: 8px 0; }
+  .hint { font-size: 10px; color: var(--muted); line-height: 1.6; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+</style>
+</head>
+<body>
+<div id=""app"">
+  <header id=""topbar"">
+    <button id=""btnBack"" title=""Return to the map generator main page"" style=""margin-right:6px"">&larr; Main Page</button>
+    <div class=""title"">&#11042; Terrain Editor</div>
+    <div class=""actions"">
+      <button id=""btnNew"" title=""Reset to a flat map"">New</button>
+      <button id=""btnLoad"" title=""Load a black &amp; white PNG heightmap"">Load PNG</button>
+      <button id=""btnSave"" title=""Save PNG heightmap (black=lowest, white=highest)"">Save PNG</button>
+      <input type=""file"" id=""fileInput"" accept=""image/png,image/jpeg,image/webp,image/bmp"" style=""display:none"">
+      <button id=""btnUndo"" title=""Undo (Ctrl+Z)"">&#8630; Undo</button>
+      <button id=""btnRedo"" title=""Redo (Ctrl+Y)"">&#8631; Redo</button>
+    </div>
+  </header>
+
+  <aside id=""left-panel"">
+    <h3>Tools</h3>
+    <div class=""tool-grid"">
+      <button class=""tool-btn active"" data-tool=""raise""><span class=""icon"">&#9650;</span>Raise</button>
+      <button class=""tool-btn"" data-tool=""lower""><span class=""icon"">&#9660;</span>Lower</button>
+      <button class=""tool-btn"" data-tool=""smooth""><span class=""icon"">&#8767;</span>Smooth</button>
+      <button class=""tool-btn"" data-tool=""flatten""><span class=""icon"">&#9644;</span>Flatten</button>
+      <button class=""tool-btn"" data-tool=""setlevel""><span class=""icon"">&#8801;</span>Set Level</button>
+      <button class=""tool-btn"" data-tool=""noise""><span class=""icon"">&#8776;</span>Noise</button>
+      <button class=""tool-btn"" data-tool=""stamp"" style=""grid-column:1/3""><span class=""icon"">&#9968;</span>Stamp</button>
+    </div>
+
+    <h3>Brush</h3>
+    <div class=""field"">
+      <label>Size <span class=""val"" id=""vBrushSize"">40</span></label>
+      <input type=""range"" id=""brushSize"" min=""1"" max=""400"" value=""40"">
+    </div>
+    <div class=""field"">
+      <label>Strength <span class=""val"" id=""vBrushStrength"">0.50</span></label>
+      <input type=""range"" id=""brushStrength"" min=""0"" max=""1"" step=""0.01"" value=""0.5"">
+    </div>
+    <div class=""field"" id=""falloffField"">
+      <label>Falloff</label>
+      <select id=""brushFalloff"">
+        <option value=""linear"">Linear</option>
+        <option value=""smoothstep"" selected>Smoothstep</option>
+        <option value=""gaussian"">Gaussian</option>
+        <option value=""constant"">Constant</option>
+      </select>
+    </div>
+    <div class=""field"" id=""levelField"">
+      <label>Level <span class=""val"" id=""vLevel"">0.50</span></label>
+      <input type=""range"" id=""levelValue"" min=""0"" max=""1"" step=""0.01"" value=""0.5"">
+    </div>
+    <div class=""field"" id=""noiseField"" style=""display:none"">
+      <label>Noise Scale <span class=""val"" id=""vNoiseScale"">0.10</span></label>
+      <input type=""range"" id=""noiseScale"" min=""0.01"" max=""1"" step=""0.01"" value=""0.1"">
+    </div>
+    <div class=""field"" id=""stampField"" style=""display:none"">
+      <label>Stamp Shape</label>
+      <select id=""stampShape"">
+        <option value=""hill"" selected>Hill</option>
+        <option value=""cone"">Cone</option>
+        <option value=""plateau"">Plateau</option>
+        <option value=""image"">Custom Image</option>
+      </select>
+    </div>
+    <div class=""field checkbox"" id=""stampInvertField"" style=""display:none"">
+      <label><input type=""checkbox"" id=""stampInvert""> Invert (carve down)</label>
+    </div>
+    <button id=""btnLoadStamp"" style=""width:100%;display:none"" title=""Load a grayscale image as a custom stamp shape"">Load Stamp Image</button>
+    <input type=""file"" id=""stampFileInput"" accept=""image/png,image/jpeg,image/webp"" style=""display:none"">
+
+    <h3>One-Shot Filters</h3>
+    <div class=""action-grid"">
+      <button id=""btnSmoothAll"" title=""Blur the whole heightmap"">Smooth All</button>
+      <button id=""btnErode"" title=""Simple thermal erosion pass"">Erode</button>
+      <button id=""btnTerrace"" title=""Quantize into height steps"">Terrace</button>
+      <button id=""btnNormalize"" title=""Stretch heights to fill 0-1"">Normalize</button>
+      <button id=""btnInvert"" title=""Invert all heights"">Invert</button>
+      <button id=""btnClearLevel"" title=""Fill entire map with the Level value"">Fill Level</button>
+    </div>
+
+    <h3>Shortcuts</h3>
+    <p class=""hint"">
+      [ and ] &nbsp;Brush size<br>
+      1-7 &nbsp;&nbsp;Select tool<br>
+      Ctrl+Z &nbsp;Undo<br>
+      Ctrl+Y &nbsp;Redo
+    </p>
+  </aside>
+
+  <main id=""center"">
+    <canvas id=""canvas2d""></canvas>
+    <div id=""brushRing""></div>
+    <div id=""loadingBanner"">Working&hellip;</div>
+    <div id=""warnBanner""></div>
+  </main>
+
+  <aside id=""right-panel"">
+    <h3>Heightmap</h3>
+    <div class=""field"">
+      <label>Resolution</label>
+      <select id=""resolution"">
+        <option value=""1024"" selected>1024 &times; 1024</option>
+        <option value=""2048"">2048 &times; 2048</option>
+      </select>
+    </div>
+    <div class=""field"">
+      <label>Min Height / black (m) <span class=""val"" id=""vMinHeight"">498</span></label>
+      <input type=""number"" id=""minHeightM"" min=""1"" max=""999"" value=""498"">
+    </div>
+    <div class=""field"">
+      <label>Max Height / white (m) <span class=""val"" id=""vMaxHeight"">700</span></label>
+      <input type=""number"" id=""maxHeightM"" min=""1"" max=""999"" value=""700"">
+    </div>
+    <p class=""hint"" style=""margin:-2px 0 4px"">These match the map generator's own Height Min/Max switches - 500 = sea level.</p>
+    <div class=""field checkbox""><label><input type=""checkbox"" id=""showColors"" checked> Color by height</label></div>
+
+    <h3>Stats</h3>
+    <p class=""hint"">
+      Min: <span class=""val"" id=""statMin"">0m</span><br>
+      Max: <span class=""val"" id=""statMax"">0m</span><br>
+      Mean: <span class=""val"" id=""statMean"">0m</span><br>
+      Below water: <span class=""val"" id=""statWater"">0%</span>
+    </p>
+
+    <div class=""sep""></div>
+    <p class=""hint"">Save PNG exports a grayscale image (black = lowest point, white = highest point) sized to your chosen resolution, ready to load or upload elsewhere in the map generator web interface.</p>
+  </aside>
+
+  <footer id=""statusbar"">
+    <span>Col: <span class=""val"" id=""cursorX"">-</span> Row: <span class=""val"" id=""cursorY"">-</span></span>
+    <span>Height: <span class=""val"" id=""cursorH"">-</span></span>
+    <span>Tool: <span class=""val"" id=""statusTool"">Raise</span></span>
+    <span>Brush: <span class=""val"" id=""statusBrush"">40px smoothstep</span></span>
+    <span>History: <span class=""val"" id=""statusHistory"">0/0</span></span>
+    <span style=""margin-left:auto"">Size: <span class=""val"" id=""statusSize"">1024&times;1024</span></span>
+  </footer>
+</div>
+
+<script>
+""use strict"";
+
+/* ======================== Core state ======================== */
+
+var MAX_HISTORY = 12;
+
+var State = {
+  resolution: 1024,
+  heights: null,           // Float32Array, values 0..1, row-major (row 0 = top)
+  tool: 'raise',
+  painting: false,
+  flattenTarget: 0.5,
+  cursor: { col: -1, row: -1, valid: false },
+  undoStack: [],
+  redoStack: []
+};
+
+var Brush = {
+  size: 40,
+  strength: 0.5,
+  falloff: 'smoothstep',
+  level: 0.5,
+  noiseScale: 0.1,
+  stampShape: 'hill',
+  stampInvert: false
+};
+
+var SEA_LEVEL_M = 500; // fixed - matches the map generator's ""500 = sealevel"" convention
+
+var View = {
+  minHeightM: 498,  // matches server default height.min - meters at pixel value black (0)
+  maxHeightM: 700,  // matches server default height.max - meters at pixel value white (1)
+  showColors: true
+};
+
+function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+function clamp01(v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function heightToMeters(h) { return lerp(View.minHeightM, View.maxHeightM, clamp01(h)); }
+
+/* ======================== Heightmap data ======================== */
+
+function newHeightmap(res, fillValue) {
+  var arr = new Float32Array(res * res);
+  if (fillValue) arr.fill(fillValue);
+  return arr;
+}
+
+function idx(col, row, res) { return row * res + col; }
+
+function resampleHeights(src, srcRes, dstRes) {
+  var dst = new Float32Array(dstRes * dstRes);
+  for (var y = 0; y < dstRes; y++) {
+    var v = dstRes > 1 ? y / (dstRes - 1) : 0;
+    var sy = v * (srcRes - 1);
+    var y0 = Math.floor(sy), y1 = Math.min(y0 + 1, srcRes - 1), fy = sy - y0;
+    for (var x = 0; x < dstRes; x++) {
+      var u = dstRes > 1 ? x / (dstRes - 1) : 0;
+      var sx = u * (srcRes - 1);
+      var x0 = Math.floor(sx), x1 = Math.min(x0 + 1, srcRes - 1), fx = sx - x0;
+      var h00 = src[y0 * srcRes + x0], h10 = src[y0 * srcRes + x1];
+      var h01 = src[y1 * srcRes + x0], h11 = src[y1 * srcRes + x1];
+      var top = lerp(h00, h10, fx), bot = lerp(h01, h11, fx);
+      dst[y * dstRes + x] = lerp(top, bot, fy);
+    }
+  }
+  return dst;
+}
+
+/* ======================== History (undo/redo) ======================== */
+/* Snapshots are quantized to 8-bit to keep memory bounded on large maps. */
+
+function quantize(heights) {
+  var n = heights.length;
+  var out = new Uint8Array(n);
+  for (var i = 0; i < n; i++) out[i] = Math.round(clamp01(heights[i]) * 255);
+  return out;
+}
+function dequantize(bytes) {
+  var n = bytes.length;
+  var out = new Float32Array(n);
+  for (var i = 0; i < n; i++) out[i] = bytes[i] / 255;
+  return out;
+}
+
+function pushHistory() {
+  State.undoStack.push({ resolution: State.resolution, data: quantize(State.heights) });
+  if (State.undoStack.length > MAX_HISTORY) State.undoStack.shift();
+  State.redoStack.length = 0;
+  updateHistoryStatus();
+}
+
+function undo() {
+  if (State.undoStack.length === 0) return;
+  var snap = State.undoStack.pop();
+  State.redoStack.push({ resolution: State.resolution, data: quantize(State.heights) });
+  State.resolution = snap.resolution;
+  State.heights = dequantize(snap.data);
+  onHeightmapReplaced();
+}
+
+function redo() {
+  if (State.redoStack.length === 0) return;
+  var snap = State.redoStack.pop();
+  State.undoStack.push({ resolution: State.resolution, data: quantize(State.heights) });
+  State.resolution = snap.resolution;
+  State.heights = dequantize(snap.data);
+  onHeightmapReplaced();
+}
+
+function updateHistoryStatus() {
+  document.getElementById('statusHistory').textContent = State.undoStack.length + '/' + (State.undoStack.length + State.redoStack.length);
+  document.getElementById('btnUndo').disabled = State.undoStack.length === 0;
+  document.getElementById('btnRedo').disabled = State.redoStack.length === 0;
+}
+
+function onHeightmapReplaced() {
+  syncResolutionSelect();
+  document.getElementById('statusSize').textContent = State.resolution + '\u00d7' + State.resolution;
+  updateHistoryStatus();
+  requestRedraw2D();
+  updateStats();
+}
+
+/* ======================== Falloff / brush ======================== */
+
+function falloffValue(t, kind) {
+  // t: 0 at brush center, 1 at brush edge
+  t = clamp01(t);
+  switch (kind) {
+    case 'linear': return 1 - t;
+    case 'gaussian': return Math.exp(-(t * t) * 4);
+    case 'constant': return t < 1 ? 1 : 0;
+    case 'smoothstep':
+    default:
+      var s = 1 - t;
+      return s * s * (3 - 2 * s);
+  }
+}
+
+function hashNoise(x, y) {
+  var n = Math.sin(x * 127.1 + y * 311.7) * 43758.5453123;
+  return n - Math.floor(n); // 0..1
+}
+
+var RATE = 2.2; // base rate of change per second at strength=1, falloff=1
+
+function applyBrushAt(centerCol, centerRow, dt) {
+  var res = State.resolution;
+  var r = Brush.size;
+  if (r <= 0) return;
+  var minC = clamp(Math.floor(centerCol - r), 0, res - 1);
+  var maxC = clamp(Math.ceil(centerCol + r), 0, res - 1);
+  var minR = clamp(Math.floor(centerRow - r), 0, res - 1);
+  var maxR = clamp(Math.ceil(centerRow + r), 0, res - 1);
+  var h = State.heights;
+  var tool = State.tool;
+  var strength = Brush.strength;
+  var target = tool === 'flatten' ? State.flattenTarget : Brush.level;
+  var isStamp = tool === 'stamp';
+  var stampInvert = Brush.stampInvert;
+  var r2 = r * r;
+
+  for (var row = minR; row <= maxR; row++) {
+    for (var col = minC; col <= maxC; col++) {
+      var dx = col - centerCol, dy = row - centerRow;
+      var f;
+      if (isStamp) {
+        f = stampShapeValue(dx, dy, r);
+        if (stampInvert) f = -f;
+        if (f === 0) continue;
+      } else {
+        // Cheap squared-distance bounds check first - avoids a sqrt() for
+        // every cell in the square bounding box that falls outside the
+        // circular brush (~21% of them), which matters at 2048 resolution
+        // with a large brush held down every animation frame.
+        var dist2 = dx * dx + dy * dy;
+        if (dist2 > r2) continue;
+        var dist = Math.sqrt(dist2);
+        f = falloffValue(dist / r, Brush.falloff);
+        if (f <= 0) continue;
+      }
+      var i = idx(col, row, res);
+      var amt = f * strength * dt * RATE;
+      var hv = h[i];
+      switch (tool) {
+        case 'raise':
+        case 'stamp':
+          hv += amt;
+          break;
+        case 'lower':
+          hv -= amt;
+          break;
+        case 'smooth': {
+          var c0 = col > 0 ? col - 1 : col, c1 = col < res - 1 ? col + 1 : col;
+          var r0 = row > 0 ? row - 1 : row, r1 = row < res - 1 ? row + 1 : row;
+          var avg = (h[idx(c0, row, res)] + h[idx(c1, row, res)] + h[idx(col, r0, res)] + h[idx(col, r1, res)]) * 0.25;
+          hv += (avg - hv) * Math.min(1, amt * 2);
+          break;
+        }
+        case 'flatten':
+        case 'setlevel':
+          hv += (target - hv) * Math.min(1, amt * 2);
+          break;
+        case 'noise': {
+          var n = hashNoise(col * Brush.noiseScale, row * Brush.noiseScale) * 2 - 1;
+          hv += n * amt;
+          break;
+        }
+      }
+      h[i] = clamp01(hv);
+    }
+  }
+}
+
+/* ======================== Stamps ======================== */
+
+var StampImage = { ready: false, size: 0, data: null };
+
+function stampShapeValue(dx, dy, r) {
+  var shape = Brush.stampShape;
+  if (shape === 'image' && StampImage.ready) {
+    var u = clamp01((dx / r + 1) / 2);
+    var v = clamp01((dy / r + 1) / 2);
+    return sampleStampImage(u, v);
+  }
+  var dist = Math.sqrt(dx * dx + dy * dy) / r;
+  if (dist > 1) return 0;
+  if (shape === 'cone') return 1 - dist;
+  if (shape === 'plateau') {
+    if (dist <= 0.7) return 1;
+    var s = clamp01(1 - (dist - 0.7) / 0.3);
+    return s * s * (3 - 2 * s);
+  }
+  // 'hill' (default) and fallback when 'image' has nothing loaded yet
+  var t = 1 - dist;
+  return t * t * (3 - 2 * t);
+}
+
+function sampleStampImage(u, v) {
+  var size = StampImage.size;
+  var d = StampImage.data;
+  var sx = u * (size - 1), sy = v * (size - 1);
+  var x0 = Math.floor(sx), x1 = Math.min(x0 + 1, size - 1), fx = sx - x0;
+  var y0 = Math.floor(sy), y1 = Math.min(y0 + 1, size - 1), fy = sy - y0;
+  var h00 = d[y0 * size + x0], h10 = d[y0 * size + x1];
+  var h01 = d[y1 * size + x0], h11 = d[y1 * size + x1];
+  var top = lerp(h00, h10, fx), bot = lerp(h01, h11, fx);
+  return lerp(top, bot, fy);
+}
+
+function loadStampImage(img) {
+  var size = 128;
+  var off = document.createElement('canvas');
+  off.width = size; off.height = size;
+  var c = off.getContext('2d');
+  c.fillStyle = '#000';
+  c.fillRect(0, 0, size, size);
+  c.drawImage(img, 0, 0, size, size);
+  var data = c.getImageData(0, 0, size, size).data;
+  var arr = new Float32Array(size * size);
+  for (var i = 0; i < size * size; i++) {
+    var r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+    arr[i] = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  }
+  StampImage.size = size;
+  StampImage.data = arr;
+  StampImage.ready = true;
+  Brush.stampShape = 'image';
+  var sel = document.getElementById('stampShape');
+  if (sel) sel.value = 'image';
+}
+
+/* ======================== One-shot filters ======================== */
+
+function filterSmoothAll() {
+  var res = State.resolution, h = State.heights;
+  var out = new Float32Array(h.length);
+  for (var row = 0; row < res; row++) {
+    var r0 = row > 0 ? row - 1 : row, r1 = row < res - 1 ? row + 1 : row;
+    for (var col = 0; col < res; col++) {
+      var c0 = col > 0 ? col - 1 : col, c1 = col < res - 1 ? col + 1 : col;
+      var sum = h[idx(c0, r0, res)] + h[idx(col, r0, res)] + h[idx(c1, r0, res)] +
+                h[idx(c0, row, res)] + h[idx(col, row, res)] + h[idx(c1, row, res)] +
+                h[idx(c0, r1, res)] + h[idx(col, r1, res)] + h[idx(c1, r1, res)];
+      out[idx(col, row, res)] = sum / 9;
+    }
+  }
+  State.heights = out;
+}
+
+function filterErode(iterations, talus) {
+  var res = State.resolution;
+  var src = State.heights;
+  for (var it = 0; it < iterations; it++) {
+    var dst = new Float32Array(src);
+    for (var row = 0; row < res; row++) {
+      for (var col = 0; col < res; col++) {
+        var i = idx(col, row, res);
+        var h = src[i];
+        var lowestI = -1, lowestH = h - talus;
+        for (var dy = -1; dy <= 1; dy++) {
+          for (var dx = -1; dx <= 1; dx++) {
+            if (dx === 0 && dy === 0) continue;
+            var nc = col + dx, nr = row + dy;
+            if (nc < 0 || nc >= res || nr < 0 || nr >= res) continue;
+            var ni = idx(nc, nr, res);
+            if (src[ni] < lowestH) { lowestH = src[ni]; lowestI = ni; }
+          }
+        }
+        if (lowestI >= 0) {
+          var diff = h - src[lowestI];
+          var move = diff * 0.5;
+          dst[i] -= move;
+          dst[lowestI] += move;
+        }
+      }
+    }
+    src = dst;
+  }
+  State.heights = src;
+}
+
+function filterTerrace(steps) {
+  var h = State.heights;
+  for (var i = 0; i < h.length; i++) h[i] = clamp01(Math.round(h[i] * steps) / steps);
+}
+
+function filterNormalize() {
+  var h = State.heights;
+  var min = Infinity, max = -Infinity;
+  for (var i = 0; i < h.length; i++) { if (h[i] < min) min = h[i]; if (h[i] > max) max = h[i]; }
+  var range = max - min;
+  if (range < 1e-6) return;
+  for (i = 0; i < h.length; i++) h[i] = (h[i] - min) / range;
+}
+
+function filterInvert() {
+  var h = State.heights;
+  for (var i = 0; i < h.length; i++) h[i] = 1 - h[i];
+}
+
+function filterFillLevel() {
+  State.heights.fill(clamp01(Brush.level));
+}
+
+/* ======================== 2D canvas ======================== */
+
+var canvas2d = document.getElementById('canvas2d');
+var ctx2d = canvas2d.getContext('2d');
+var needsRedraw2D = true;
+var offCanvas = document.createElement('canvas');
+var offCtx = offCanvas.getContext('2d');
+var cachedImageData = null;
+var cachedImageDataRes = 0;
+
+// The water/sand/grass/rock/snow gradient is static, so it's baked into a
+// 256-entry lookup table once instead of being recomputed (with array
+// allocations) for every one of a few million pixels on every redraw.
+var COLOR_PALETTE = (function () {
+  var stops = [
+    [0.00, 26, 95, 122], [0.05, 42, 130, 158], [0.12, 194, 178, 128],
+    [0.20, 110, 156, 80], [0.40, 74, 124, 58], [0.55, 112, 112, 112],
+    [0.75, 180, 180, 180], [1.00, 255, 255, 255]
+  ];
+  var pal = new Uint8Array(256 * 3);
+  for (var q = 0; q < 256; q++) {
+    var h = q / 255;
+    var rC = 255, gC = 255, bC = 255;
+    for (var i = 0; i < stops.length - 1; i++) {
+      var a = stops[i], b = stops[i + 1];
+      if (h >= a[0] && h <= b[0]) {
+        var t = b[0] > a[0] ? (h - a[0]) / (b[0] - a[0]) : 0;
+        rC = Math.round(a[1] + (b[1] - a[1]) * t);
+        gC = Math.round(a[2] + (b[2] - a[2]) * t);
+        bC = Math.round(a[3] + (b[3] - a[3]) * t);
+        break;
+      }
+    }
+    pal[q * 3] = rC; pal[q * 3 + 1] = gC; pal[q * 3 + 2] = bC;
+  }
+  return pal;
+})();
+
+function requestRedraw2D() { needsRedraw2D = true; }
+
+function draw2D() {
+  if (!needsRedraw2D) return;
+  needsRedraw2D = false;
+  var res = State.resolution;
+  if (offCanvas.width !== res) { offCanvas.width = res; offCanvas.height = res; }
+  if (!cachedImageData || cachedImageDataRes !== res) {
+    cachedImageData = offCtx.createImageData(res, res);
+    cachedImageDataRes = res;
+  }
+  var imgData = cachedImageData;
+  var h = State.heights;
+  var data = imgData.data;
+  var useColor = View.showColors;
+  var pal = COLOR_PALETTE;
+  for (var i = 0; i < h.length; i++) {
+    var q = (h[i] * 255 + 0.5) | 0; // fast round + clamp via typed-array-safe int cast
+    if (q < 0) q = 0; else if (q > 255) q = 255;
+    var o = i * 4;
+    if (useColor) {
+      var p = q * 3;
+      data[o] = pal[p]; data[o + 1] = pal[p + 1]; data[o + 2] = pal[p + 2];
+    } else {
+      data[o] = q; data[o + 1] = q; data[o + 2] = q;
+    }
+    data[o + 3] = 255;
+  }
+  offCtx.putImageData(imgData, 0, 0);
+
+  var w = canvas2d.clientWidth, hgt = canvas2d.clientHeight;
+  if (canvas2d.width !== w || canvas2d.height !== hgt) { canvas2d.width = w; canvas2d.height = hgt; }
+  ctx2d.imageSmoothingEnabled = false;
+  ctx2d.clearRect(0, 0, canvas2d.width, canvas2d.height);
+  ctx2d.drawImage(offCanvas, 0, 0, canvas2d.width, canvas2d.height);
+}
+
+function canvas2DToDataCoords(clientX, clientY) {
+  var rect = canvas2d.getBoundingClientRect();
+  var u = (clientX - rect.left) / rect.width;
+  var v = (clientY - rect.top) / rect.height;
+  if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+  var col = Math.round(u * (State.resolution - 1));
+  var row = Math.round(v * (State.resolution - 1));
+  return { col: col, row: row, u: u, v: v };
+}
+
+/* ======================== 2D interaction ======================== */
+
+(function setup2DControls() {
+  canvas2d.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0) return;
+    canvas2d.setPointerCapture(e.pointerId);
+    var hit = canvas2DToDataCoords(e.clientX, e.clientY);
+    if (!hit) return;
+    State.cursor = { col: hit.col, row: hit.row, valid: true };
+    updateCursorStatus();
+    if (State.tool === 'flatten') State.flattenTarget = State.heights[idx(hit.col, hit.row, State.resolution)];
+    pushHistory();
+    State.painting = true;
+    resetPaintClock();
+  });
+  canvas2d.addEventListener('pointermove', function (e) {
+    var hit = canvas2DToDataCoords(e.clientX, e.clientY);
+    if (hit) {
+      State.cursor = { col: hit.col, row: hit.row, valid: true };
+      updateCursorStatus();
+      showBrushRing2D(e);
+    } else {
+      State.cursor.valid = false;
+      updateCursorStatus();
+      document.getElementById('brushRing').style.display = 'none';
+    }
+  });
+  function stop() { if (State.painting) { State.painting = false; updateStats(); } }
+  canvas2d.addEventListener('pointerup', stop);
+  canvas2d.addEventListener('pointerleave', function () { stop(); document.getElementById('brushRing').style.display = 'none'; });
+
+  function showBrushRing2D(e) {
+    var ring = document.getElementById('brushRing');
+    var rect = canvas2d.getBoundingClientRect();
+    var centerRect = document.getElementById('center').getBoundingClientRect();
+    var pxRadius = (Brush.size / State.resolution) * rect.width;
+    ring.style.display = 'block';
+    ring.style.width = (pxRadius * 2) + 'px';
+    ring.style.height = (pxRadius * 2) + 'px';
+    ring.style.left = (rect.left - centerRect.left + (e.clientX - rect.left) - pxRadius) + 'px';
+    ring.style.top = (rect.top - centerRect.top + (e.clientY - rect.top) - pxRadius) + 'px';
+  }
+})();
+
+/* ======================== Shared paint ticker ======================== */
+// A single continuous loop drives every brush stroke. Pointer handlers above
+// only ever update State.cursor/State.painting; applying the brush here
+// (once per animation frame, with a floored delta time) means a single click
+// always produces a visible dab, and holding the mouse down keeps painting
+// even while it isn't moving.
+var PAINT_MIN_DT = 1 / 30;
+var paintLastTime = 0;
+
+function resetPaintClock() { paintLastTime = 0; }
+
+function paintTick(now) {
+  if (State.painting && State.cursor.valid) {
+    // paintLastTime is 0 only on the first tick of a new stroke (reset by
+    // resetPaintClock at pointerdown) - that tick gets a floored dt so a
+    // single click always produces a visible dab. Every later tick in the
+    // same stroke uses the real measured interval.
+    var dt = paintLastTime ? (now - paintLastTime) / 1000 : PAINT_MIN_DT;
+    dt = clamp(dt, 0.001, 0.1);
+    dt = paintLastTime ? dt : Math.max(dt, PAINT_MIN_DT);
+    applyBrushAt(State.cursor.col, State.cursor.row, dt);
+    requestRedraw2D();
+    updateCursorStatus();
+  }
+  paintLastTime = now;
+}
+
+/* ======================== Status / stats UI ======================== */
+
+function updateCursorStatus() {
+  var xEl = document.getElementById('cursorX'), yEl = document.getElementById('cursorY'), hEl = document.getElementById('cursorH');
+  if (!State.cursor.valid) { xEl.textContent = '-'; yEl.textContent = '-'; hEl.textContent = '-'; return; }
+  xEl.textContent = State.cursor.col;
+  yEl.textContent = State.cursor.row;
+  var h = State.heights[idx(State.cursor.col, State.cursor.row, State.resolution)];
+  hEl.textContent = h.toFixed(3) + ' (' + Math.round(heightToMeters(h)) + 'm)';
+}
+
+var statsTimer = null;
+function updateStats() {
+  if (statsTimer) return;
+  statsTimer = setTimeout(function () {
+    statsTimer = null;
+    var h = State.heights;
+    var min = Infinity, max = -Infinity, sum = 0, below = 0;
+    for (var i = 0; i < h.length; i++) {
+      var v = h[i];
+      if (v < min) min = v;
+      if (v > max) max = v;
+      sum += v;
+      if (heightToMeters(v) <= SEA_LEVEL_M) below++;
+    }
+    var mean = sum / h.length;
+    document.getElementById('statMin').textContent = Math.round(heightToMeters(min)) + 'm';
+    document.getElementById('statMax').textContent = Math.round(heightToMeters(max)) + 'm';
+    document.getElementById('statMean').textContent = Math.round(heightToMeters(mean)) + 'm';
+    document.getElementById('statWater').textContent = Math.round((below / h.length) * 100) + '%';
+  }, 120);
+}
+
+/* ======================== Load / Save PNG ======================== */
+
+function ensureResolutionOption(size) {
+  var sel = document.getElementById('resolution');
+  var found = false;
+  for (var i = 0; i < sel.options.length; i++) { if (parseInt(sel.options[i].value, 10) === size) { found = true; break; } }
+  if (!found) {
+    var opt = document.createElement('option');
+    opt.value = String(size);
+    opt.textContent = size + ' \u00d7 ' + size + ' (custom)';
+    sel.appendChild(opt);
+  }
+  sel.value = String(size);
+}
+function syncResolutionSelect() {
+  ensureResolutionOption(State.resolution);
+}
+
+function loadImageAsHeightmap(img) {
+  var raw = Math.max(img.width, img.height);
+  // Only 1024 and 2048 are offered as editing resolutions now (256/512 were
+  // too small to be useful, 4096 was too slow to paint on) - snap any loaded
+  // image to whichever is closest instead of preserving an arbitrary size.
+  var size = raw <= 1536 ? 1024 : 2048;
+  var off = document.createElement('canvas');
+  off.width = size; off.height = size;
+  var c = off.getContext('2d');
+  c.fillStyle = '#000';
+  c.fillRect(0, 0, size, size);
+  c.drawImage(img, 0, 0, size, size);
+  var data = c.getImageData(0, 0, size, size).data;
+  var heights = new Float32Array(size * size);
+  for (var i = 0; i < size * size; i++) {
+    var r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
+    heights[i] = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  }
+  pushHistory();
+  State.resolution = size;
+  State.heights = heights;
+  onHeightmapReplaced();
+}
+
+function exportPNG() {
+  var res = State.resolution;
+  var off = document.createElement('canvas');
+  off.width = res; off.height = res;
+  var c = off.getContext('2d');
+  var imgData = c.createImageData(res, res);
+  var h = State.heights;
+  for (var i = 0; i < h.length; i++) {
+    var v = Math.round(clamp01(h[i]) * 255);
+    var o = i * 4;
+    imgData.data[o] = v; imgData.data[o + 1] = v; imgData.data[o + 2] = v; imgData.data[o + 3] = 255;
+  }
+  c.putImageData(imgData, 0, 0);
+  off.toBlob(function (blob) {
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = 'heightmap.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+  }, 'image/png');
+}
+
+function showWarning(msg) {
+  var el = document.getElementById('warnBanner');
+  el.textContent = msg;
+  el.style.display = 'block';
+  clearTimeout(showWarning._t);
+  showWarning._t = setTimeout(function () { el.style.display = 'none'; }, 4000);
+}
+
+/* ======================== Wiring up UI ======================== */
+
+function setTool(tool) {
+  State.tool = tool;
+  document.querySelectorAll('.tool-btn').forEach(function (b) { b.classList.toggle('active', b.dataset.tool === tool); });
+  document.getElementById('statusTool').textContent = tool.charAt(0).toUpperCase() + tool.slice(1);
+  document.getElementById('noiseField').style.display = tool === 'noise' ? '' : 'none';
+  document.getElementById('levelField').style.display = (tool === 'setlevel' || tool === 'flatten') ? '' : 'none';
+  var isStamp = tool === 'stamp';
+  document.getElementById('falloffField').style.display = isStamp ? 'none' : '';
+  document.getElementById('stampField').style.display = isStamp ? '' : 'none';
+  document.getElementById('stampInvertField').style.display = isStamp ? '' : 'none';
+  document.getElementById('btnLoadStamp').style.display = isStamp ? '' : 'none';
+}
+
+function updateStatusBrush() {
+  document.getElementById('statusBrush').textContent = Brush.size + 'px ' + Brush.falloff;
+}
+
+function runHeavy(fn) {
+  var banner = document.getElementById('loadingBanner');
+  banner.style.display = 'block';
+  setTimeout(function () {
+    try {
+      pushHistory();
+      fn();
+      onHeightmapReplaced();
+    } finally {
+      banner.style.display = 'none';
+    }
+  }, 20);
+}
+
+function wireUI() {
+  document.querySelectorAll('.tool-btn').forEach(function (b) {
+    b.addEventListener('click', function () { setTool(b.dataset.tool); });
+  });
+
+  document.getElementById('brushSize').addEventListener('input', function (e) {
+    Brush.size = parseInt(e.target.value, 10);
+    document.getElementById('vBrushSize').textContent = Brush.size;
+    updateStatusBrush();
+  });
+  document.getElementById('brushStrength').addEventListener('input', function (e) {
+    Brush.strength = parseFloat(e.target.value);
+    document.getElementById('vBrushStrength').textContent = Brush.strength.toFixed(2);
+  });
+  document.getElementById('brushFalloff').addEventListener('change', function (e) {
+    Brush.falloff = e.target.value;
+    updateStatusBrush();
+  });
+  document.getElementById('levelValue').addEventListener('input', function (e) {
+    Brush.level = parseFloat(e.target.value);
+    document.getElementById('vLevel').textContent = Brush.level.toFixed(2);
+  });
+  document.getElementById('noiseScale').addEventListener('input', function (e) {
+    Brush.noiseScale = parseFloat(e.target.value);
+    document.getElementById('vNoiseScale').textContent = Brush.noiseScale.toFixed(2);
+  });
+
+  document.getElementById('minHeightM').addEventListener('change', function (e) {
+    var v = clamp(parseInt(e.target.value, 10) || 498, 1, 999);
+    if (v >= View.maxHeightM) v = View.maxHeightM - 1;
+    View.minHeightM = v;
+    e.target.value = v;
+    document.getElementById('vMinHeight').textContent = v;
+    requestRedraw2D();
+    updateStats();
+    updateCursorStatus();
+  });
+  document.getElementById('maxHeightM').addEventListener('change', function (e) {
+    var v = clamp(parseInt(e.target.value, 10) || 700, 1, 999);
+    if (v <= View.minHeightM) v = View.minHeightM + 1;
+    View.maxHeightM = v;
+    e.target.value = v;
+    document.getElementById('vMaxHeight').textContent = v;
+    requestRedraw2D();
+    updateStats();
+    updateCursorStatus();
+  });
+  document.getElementById('showColors').addEventListener('change', function (e) {
+    View.showColors = e.target.checked;
+    requestRedraw2D();
+  });
+
+  document.getElementById('stampShape').addEventListener('change', function (e) {
+    Brush.stampShape = e.target.value;
+  });
+  document.getElementById('stampInvert').addEventListener('change', function (e) {
+    Brush.stampInvert = e.target.checked;
+  });
+  document.getElementById('btnLoadStamp').addEventListener('click', function () { document.getElementById('stampFileInput').click(); });
+  document.getElementById('stampFileInput').addEventListener('change', function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var img = new Image();
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      img.onload = function () { loadStampImage(img); };
+      img.onerror = function () { showWarning('Could not read that stamp image.'); };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  });
+
+  document.getElementById('resolution').addEventListener('change', function (e) {
+    var newRes = parseInt(e.target.value, 10);
+    if (newRes === State.resolution) return;
+    pushHistory();
+    State.heights = resampleHeights(State.heights, State.resolution, newRes);
+    State.resolution = newRes;
+    onHeightmapReplaced();
+  });
+
+  document.getElementById('btnNew').addEventListener('click', function () {
+    if (!confirm('Discard the current heightmap and start a new flat map?')) return;
+    pushHistory();
+    State.heights = newHeightmap(State.resolution, 0.5);
+    onHeightmapReplaced();
+  });
+
+  document.getElementById('btnBack').addEventListener('click', function () { window.location.href = '/'; });
+
+  document.getElementById('btnUndo').addEventListener('click', undo);
+  document.getElementById('btnRedo').addEventListener('click', redo);
+
+  document.getElementById('btnLoad').addEventListener('click', function () { document.getElementById('fileInput').click(); });
+  document.getElementById('fileInput').addEventListener('change', function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var img = new Image();
+    var reader = new FileReader();
+    reader.onload = function (ev) {
+      img.onload = function () { loadImageAsHeightmap(img); };
+      img.onerror = function () { showWarning('Could not read that image file.'); };
+      img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  });
+
+  document.getElementById('btnSave').addEventListener('click', exportPNG);
+
+  document.getElementById('btnSmoothAll').addEventListener('click', function () { runHeavy(filterSmoothAll); });
+  document.getElementById('btnErode').addEventListener('click', function () { runHeavy(function () { filterErode(6, 0.01); }); });
+  document.getElementById('btnTerrace').addEventListener('click', function () { runHeavy(function () { filterTerrace(8); }); });
+  document.getElementById('btnNormalize').addEventListener('click', function () { runHeavy(filterNormalize); });
+  document.getElementById('btnInvert').addEventListener('click', function () { runHeavy(filterInvert); });
+  document.getElementById('btnClearLevel').addEventListener('click', function () { runHeavy(filterFillLevel); });
+
+  window.addEventListener('keydown', function (e) {
+    var tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+    if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
+    if (e.ctrlKey && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    // Firefox binds bare ""/"" to its quick-find search bar - swallow it here so
+    // it can't hijack the page while the editor has focus.
+    if (e.key === '/' || e.key === ""'"") { e.preventDefault(); return; }
+    if (e.key === '[') { e.preventDefault(); setBrushSize(Brush.size - 5); return; }
+    if (e.key === ']') { e.preventDefault(); setBrushSize(Brush.size + 5); return; }
+    var toolMap = { '1': 'raise', '2': 'lower', '3': 'smooth', '4': 'flatten', '5': 'setlevel', '6': 'noise', '7': 'stamp' };
+    if (toolMap[e.key]) setTool(toolMap[e.key]);
+  });
+
+  function setBrushSize(v) {
+    v = clamp(v, 1, 400);
+    Brush.size = v;
+    document.getElementById('brushSize').value = v;
+    document.getElementById('vBrushSize').textContent = v;
+    updateStatusBrush();
+  }
+
+  window.addEventListener('resize', requestRedraw2D);
+  new ResizeObserver(requestRedraw2D).observe(document.getElementById('center'));
+}
+
+/* ======================== Boot ======================== */
+
+function boot() {
+  State.resolution = 1024;
+  State.heights = newHeightmap(State.resolution, 0.5);
+  wireUI();
+  setTool('raise');
+  updateStatusBrush();
+  document.getElementById('statusSize').textContent = State.resolution + '\u00d7' + State.resolution;
+  updateHistoryStatus();
+  requestRedraw2D();
+  updateStats();
+  requestAnimationFrame(function loop(now) {
+    draw2D();
+    paintTick(now);
+    requestAnimationFrame(loop);
+  });
+}
+
+boot();
+</script>
+</body>
+</html>
+";
     #endregion
 
     #region PNG2Cubes HTML
@@ -7080,7 +8846,7 @@ body {
   background: rgba(255,255,255,0.15);
   border: none;
   color: #fff;
-  padding: 8px 14px;
+  padding: 6px 10px;
   border-radius: 20px;
   cursor: pointer;
   font-size: 13px;
@@ -7719,9 +9485,9 @@ themeToggle.addEventListener('click', () => {
 </script>
 </body>
 </html>";
-#endregion
+    #endregion
 
-#region BreakPrefab HTML
+    #region BreakPrefab HTML
     public static string BreakPrefabHtml = @"<!DOCTYPE html>
 <html lang='en'>
 <head>
@@ -9134,7 +10900,7 @@ function sendGET(inputValue) {
       z: scaleData[2] !== undefined ? scaleData[2] : (scaleData.z || 1)
       };
       const prefabName = prefab.Name || 'Unknown';
-      const shouldSkipModel = prefabName.includes('cave_') || prefabName.includes('swamp_') || prefabName.includes('ice_lake') || prefabName.includes('water_well') || prefabName.includes('ue_jungle_swamp') || prefabName.includes('ue_lake') || prefabName.includes('ue_oasis') || prefabName.includes('ue_canyon');
+      const shouldSkipModel = prefabName.includes('ue_canyon');
       if (shouldSkipModel) {
       const unityX = pos[0] !== undefined ? pos[0] : (pos.x || 0);
       const unityY = pos[1] !== undefined ? pos[1] : (pos.y || 0);
